@@ -20,8 +20,10 @@ inline wxString GateTypeName(GateType t) {
     if (t == GATE_XOR) return "XOR";
     if (t == GATE_NAND) return "NAND";
     if (t == GATE_NOR) return "NOR";
-    if (t == GATE_CUSTOM) return "CUSTOM";   // 自定义元件:名字另存在 name 字段
+    if (t == GATE_CUSTOM) return "CUSTOM";
+    if (t == GATE_DFF) return "DFF";   // 自定义元件:名字另存在 name 字段
     if (t == SW_INPUT) return "SW";
+    if (t == SW_CLOCK) return "CLK";
     return "LED";
 }
 inline GateType GateTypeFromName(const std::string& s) {
@@ -31,7 +33,9 @@ inline GateType GateTypeFromName(const std::string& s) {
     if (s == "NAND") return GATE_NAND;
     if (s == "NOR") return GATE_NOR;
     if (s == "CUSTOM") return GATE_CUSTOM;
+    if (s == "DFF") return GATE_DFF;
     if (s == "SW")  return SW_INPUT;
+    if (s == "CLK") return SW_CLOCK;
     if (s == "LED") return SW_LED;
     return GATE_AND;
 }
@@ -90,7 +94,7 @@ inline bool JsonToCircuit(const std::string& text,
 
     // name/truth 是后加的字段,用可选组 (…)? 让旧存档也能读——
     // 工程惯例:写文件严格、读文件宽容(否则老版本存的文件全打不开)
-    std::regex compRe("\\{\"id\":(\\d+),\"type\":\"(AND|OR|NOT|XOR|NAND|NOR|CUSTOM|SW|LED)\",\"x\":(-?\\d+),\"y\":(-?\\d+),\"state\":(\\d)(,\"name\":\"([^\"]*)\",\"truth\":(\\d+))?\\}");
+    std::regex compRe("\\{\"id\":(\\d+),\"type\":\"(AND|OR|NOT|XOR|NAND|NOR|CUSTOM|DFF|CLK|SW|LED)\",\"x\":(-?\\d+),\"y\":(-?\\d+),\"state\":(\\d)(,\"name\":\"([^\"]*)\",\"truth\":(\\d+))?\\}");
     std::regex wireRe("\\[(\\d+),(\\d+),(\\d+),(\\d+)\\]");
     auto end = std::sregex_iterator();
 

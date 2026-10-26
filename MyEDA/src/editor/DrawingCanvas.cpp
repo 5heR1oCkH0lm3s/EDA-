@@ -268,10 +268,10 @@ void DrawingCanvas::OnLeftDown(wxMouseEvent& e)
         Component* c = (id != -1) ? FindById(id) : nullptr;
         if (c && c->type == SW_INPUT) {
             c->state = !c->state;   // 切换!
-            dirty = true;           // 开关状态也会存进文件,所以算一次修改
-            RunSim();
+            dirty = true;
+            SimTick();               // 前进一个仿真步(不是 RunSim,保持时序状态)
         } else {
-            Hint("仿真运行中:点击开关可切换;要删除/移动元件请先停止仿真");
+            Hint("仿真运行中:点开关切换;点时钟源翻转;停止仿真后才能编辑");
         }
         return;
     }
@@ -719,6 +719,26 @@ void DrawingCanvas::DrawGate(wxDC& dc, const Component& c)
         int w = 0, h = 0;
         dc.GetTextExtent(nm, &w, &h);
         dc.DrawText(nm, x - w / 2, y - h / 2);
+    } else if (c.type == GATE_DFF) {
+        // D 触发器:方框 + "D" 标签
+        dc.DrawRoundedRectangle(x - 22, y - 18, 44, 36, 4);
+        dc.DrawText("D", x - 14, y - 9);
+        dc.SetTextForeground(*wxBLUE);
+        dc.DrawText("CLK", x - 8, y + 8);
+        dc.SetTextForeground(*wxBLACK);
+    } else if (c.type == SW_CLOCK) {
+        // 时钟源:圆角方框 + "CLK" 标签 + 方波符号
+        dc.SetBrush(wxBrush(wxColour(230, 240, 255)));
+        dc.DrawRoundedRectangle(x - 20, y - 14, 40, 28, 4);
+        dc.SetBrush(*wxWHITE_BRUSH);
+        // 画方波符号
+        dc.DrawLine(x - 12, y + 4, x - 12, y - 4);
+        dc.DrawLine(x - 12, y - 4, x - 4, y - 4);
+        dc.DrawLine(x - 4, y - 4, x - 4, y + 4);
+        dc.DrawLine(x - 4, y + 4, x + 4, y + 4);
+        dc.DrawLine(x + 4, y + 4, x + 4, y - 4);
+        dc.DrawLine(x + 4, y - 4, x + 12, y - 4);
+        dc.SetTextForeground(*wxBLACK);
     } else if (c.type == SW_INPUT) {
         // 开关:圆角方框 + "1"/"0";闭合时底色变绿
         dc.SetBrush(c.state ? wxBrush(wxColour(144, 238, 144)) : *wxWHITE_BRUSH);
@@ -785,6 +805,40 @@ void DrawingCanvas::UpdateCustomInstances(const wxString& oldName, const wxStrin
 void DrawingCanvas::RunSim()
 {
     simOut = SimulateCircuit(components, wires);
+    NotifyChanged();
+}
+
+// 前进一个仿真步:时钟翻转 + 组合门传播(触发器在下一个 Tick 捕获)
+void DrawingCanvas::SimTick()
+{
+    if (!simRunning) return;
+    simTick++;
+    // 时钟源翻转
+    for (size_t i = 0; i < components.size(); i++) {
+        if (components[i].type == SW_CLOCK)
+            simOut[components[i].id] = (simTick / 2) % 2;
+    }
+    // 组合门传播
+    for (size_t i = 0; i < components.size(); i++) {
+        const Component& c = components[i];
+        if (c.type == SW_INPUT || c.type == SW_LED || c.type == SW_CLOCK || c.type == GATE_DFF)
+            continue;
+        int v0 = GetPinValue(c.id, 0);
+        int res;
+        if (c.type == GATE_AND)       res = v0 & GetPinValue(c.id, 1);
+        else if (c.type == GATE_OR)   res = v0 | GetPinValue(c.id, 1);
+        else if (c.type == GATE_XOR)  res = v0 ^ GetPinValue(c.id, 1);
+        else if (c.type == GATE_NAND) res = !(v0 & GetPinValue(c.id, 1));
+        else if (c.type == GATE_NOR)  res = !(v0 | GetPinValue(c.id, 1));
+        else /* GATE_NOT */           res = !v0;
+        simOut[c.id] = res;
+    }
+    // D 触发器:CLK=1 时 Q=D
+    for (size_t i = 0; i < components.size(); i++) {
+        if (components[i].type != GATE_DFF) continue;
+        int clkVal = GetPinValue(components[i].id, 1);
+        if (clkVal) simOut[components[i].id] = GetPinValue(components[i].id, 0);
+    }
     NotifyChanged();
 }
 

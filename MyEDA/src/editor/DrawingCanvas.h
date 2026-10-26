@@ -56,9 +56,10 @@ public:
     }
 
     // 逻辑仿真(任务6)
-    void StartSim() { CancelWirePreview(); simRunning = true; RunSim(); NotifyChanged(); }
+    void StartSim() { CancelWirePreview(); simRunning = true; simTick = 0; RunSim(); NotifyChanged(); }
     void StopSim()  { simRunning = false; NotifyChanged(); }
     bool IsSimRunning() const { return simRunning; }
+    void SimTick();                          // 前进一个仿真步(时钟翻转→门传播)
 
     // 编辑操作(撤销/重做/复制/剪切/粘贴)
     bool Undo();
@@ -139,6 +140,8 @@ private:
     // 仿真状态
     bool simRunning = false;          // 仿真是否运行中
     std::map<int,int> simOut;         // 每个元件的输出值(仿真结果)
+    int simTick = 0;                  // 仿真步数计数器
+    std::map<int,int> prevClk;        // 上一步各 D 触发器的时钟值(检测上升沿)
 
     // 连线模式状态:点第一个引脚记下起点,再点第二个引脚完成连线
     bool wireMode = false;
@@ -157,4 +160,6 @@ private:
     bool dirty = false;                         // 有未保存的修改?
     std::function<void()> onSelection;          // 选中/内容变化时通知外面刷新属性表
     std::function<void(const wxString&)> onHint; // 操作没生效时,把原因送出去显示
+    class wxTimer;                   // 前置声明
+    wxTimer* simTimer = nullptr;     // 仿真自动步进定时器
 };

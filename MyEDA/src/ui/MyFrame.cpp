@@ -35,6 +35,7 @@ MyFrame::MyFrame(const wxString& title)
     Bind(wxEVT_MENU, &MyFrame::OnManageCustom,   this, ID_MENU_MANAGE_CUSTOM);
     Bind(wxEVT_MENU, &MyFrame::OnSelectAll,      this, ID_MENU_SELECT_ALL);
     Bind(wxEVT_CLOSE_WINDOW, &MyFrame::OnClose,  this);
+    simTimer.Bind(wxEVT_TIMER, [this](wxTimerEvent&) { canvas->SimTick(); RefreshPropertyTable(); });
     Bind(wxEVT_MENU, &MyFrame::OnAbout,          this, ID_MENU_ABOUT);
     Bind(wxEVT_MENU, &MyFrame::OnExit,           this, wxID_EXIT);
 
@@ -557,8 +558,8 @@ void MyFrame::OnDelete(wxCommandEvent&)
         SetStatusText("没有可删除的元件", 1);
     }
 }
-void MyFrame::OnSimulateStart(wxCommandEvent&){ canvas->StartSim(); SetStatusText("仿真运行中:点击开关切换状态"); }
-void MyFrame::OnSimulateStop(wxCommandEvent&) { canvas->StopSim(); SetStatusText("仿真已停止"); }
+void MyFrame::OnSimulateStart(wxCommandEvent&){ canvas->StartSim(); simTimer.Start(500); SetStatusText("仿真自动步进中"); }
+void MyFrame::OnSimulateStop(wxCommandEvent&) { simTimer.Stop(); canvas->StopSim(); SetStatusText("仿真已停止"); }
 void MyFrame::OnAbout(wxCommandEvent&)
 {
     wxMessageBox("工业软件创新训练 I\n电路原理图编辑器\n\n版本 0.1",
