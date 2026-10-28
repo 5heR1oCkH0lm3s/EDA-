@@ -4,6 +4,7 @@
 #include <wx/listctrl.h>   // wxListCtrl 列表/表格控件
 #include "editor/DrawingCanvas.h"
 #include "ui/CustomDialog.h"  // 自定义元件对话框
+#include <wx/timer.h>
 
 // ============ 菜单 ID ============
 enum {
@@ -70,6 +71,7 @@ private:
     wxTreeCtrl* componentTree;   // 左:元件库树
     DrawingCanvas* canvas;       // 中:绘图区
     wxListCtrl* propertyList;    // 右:属性表
+    wxTimer simTimer;            // 仿真步进定时器
 
     // 事件处理函数
     void OnPackModule(wxCommandEvent&);
@@ -94,6 +96,7 @@ private:
     void OnCustomGate(wxCommandEvent& event);
     void OnManageCustom(wxCommandEvent& event);
     void OnSelectAll(wxCommandEvent& event);
+    void OnSimTimer(wxTimerEvent& event);
     void OnClose(wxCloseEvent& event);
     void OnAbout(wxCommandEvent& event);
     void OnExit(wxCommandEvent& event);

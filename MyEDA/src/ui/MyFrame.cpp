@@ -42,6 +42,8 @@ MyFrame::MyFrame(const wxString& title)
     Bind(wxEVT_MENU, &MyFrame::OnSelectAll,      this, ID_MENU_SELECT_ALL);
     Bind(wxEVT_CLOSE_WINDOW, &MyFrame::OnClose,  this);
     Bind(wxEVT_MENU, [this](wxCommandEvent&) { canvas->ResetView(); SetStatusText("视图已复位为 100%"); }, ID_MENU_RESET_VIEW);
+    simTimer.Bind(wxEVT_TIMER, [this](wxTimerEvent&) { canvas->SimTick(); RefreshPropertyTable(); });
+
     Bind(wxEVT_MENU, &MyFrame::OnAbout,          this, ID_MENU_ABOUT);
     Bind(wxEVT_MENU, &MyFrame::OnExit,           this, wxID_EXIT);
 
@@ -209,6 +211,8 @@ void MyFrame::CreateClientArea()
     wxTreeItemId io = componentTree->AppendItem(root, "输入/输出");
     componentTree->AppendItem(io, "开关", -1, -1, new GateItemData(SW_INPUT));
     componentTree->AppendItem(io, "指示灯", -1, -1, new GateItemData(SW_LED));
+    componentTree->AppendItem(root,"D 触发器",-1,-1,new GateItemData(GATE_DFF));
+    componentTree->AppendItem(root,"时钟源",-1,-1,new GateItemData(SW_CLOCK));
 
     // 自定义元件分支:一个"新建"入口,以后每定义一个就往这里挂一个节点
     customRootItem = componentTree->AppendItem(root, "真值表逻辑门");
@@ -580,8 +584,8 @@ void MyFrame::OnDelete(wxCommandEvent&)
         SetStatusText("没有可删除的元件", 1);
     }
 }
-void MyFrame::OnSimulateStart(wxCommandEvent&){ canvas->StartSim(); SetStatusText("仿真运行中:点击开关切换状态"); }
-void MyFrame::OnSimulateStop(wxCommandEvent&) { canvas->StopSim(); SetStatusText("仿真已停止"); }
+void MyFrame::OnSimulateStart(wxCommandEvent&){ canvas->StartSim(); simTimer.Start(500); SetStatusText("仿真自动步进中"); }
+void MyFrame::OnSimulateStop(wxCommandEvent&) { simTimer.Stop(); canvas->StopSim(); SetStatusText("仿真已停止"); }
 void MyFrame::OnAbout(wxCommandEvent&)
 {
     wxMessageBox("工业软件创新训练 I\n电路原理图编辑器\n\n版本 0.1",
@@ -661,8 +665,8 @@ void MyFrame::OnToolAnd(wxCommandEvent&)      { canvas->SetPlaceType(GATE_AND); 
 void MyFrame::OnToolOr(wxCommandEvent&)       { canvas->SetPlaceType(GATE_OR);  SetStatusText("放置：或门,点击画布放置", 1); }
 void MyFrame::OnToolNot(wxCommandEvent&)      { canvas->SetPlaceType(GATE_NOT); SetStatusText("放置：非门,点击画布放置", 1); }
 void MyFrame::OnToolSimulate(wxCommandEvent&) {
-    if (canvas->IsSimRunning()) { canvas->StopSim(); SetStatusText("仿真已停止"); }
-    else { canvas->StartSim(); SetStatusText("仿真运行中:点击开关切换状态"); }
+    if (canvas->IsSimRunning()) { simTimer.Stop();canvas->StopSim(); SetStatusText("仿真已停止"); }
+    else { canvas->StartSim();simTimer.Start(500); SetStatusText("仿真自动步进中"); }
 }
 
 namespace {

@@ -59,8 +59,9 @@ public:
     }
 
     // 逻辑仿真(任务6)
-    void StartSim() { CancelWirePreview(); simRunning = true; RunSim(); NotifyChanged(); }
+    void StartSim() { CancelWirePreview(); simRunning = true; simTick=0;prevClk.clear(); RunSim(); for(const auto& c:components)if(c.type==GATE_DFF)prevClk[c.id]=GetPinValue(c.id,1); NotifyChanged(); }
     void StopSim()  { simRunning = false; NotifyChanged(); }
+    void SimTick();
     bool IsSimRunning() const { return simRunning; }
 
     // 编辑操作(撤销/重做/复制/剪切/粘贴)
@@ -168,6 +169,8 @@ private:
 
     // 仿真状态
     bool simRunning = false;          // 仿真是否运行中
+    int simTick=0;
+    std::map<int,int> prevClk;
     SimulationResult simOut;         // 每个元件的输出值(仿真结果)
 
     // 连线模式状态:点第一个引脚记下起点,再点第二个引脚完成连线

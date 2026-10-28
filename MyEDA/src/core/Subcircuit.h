@@ -14,6 +14,7 @@ inline bool ValidateSubcircuit(const SubcircuitDef& d, wxString* error=nullptr,i
     if(d.components.size()>10000)return fail("子电路元件数量过多");
     std::set<int> allIds,ports;std::set<wxString> names;
     for(const auto& c:d.components) {
+        if(c.type==GATE_DFF || c.type==SW_CLOCK)return fail("当前封装支持组合逻辑，请将触发器和时钟源保留在顶层电路");
         if(c.id<=0 || !allIds.insert(c.id).second)return fail("子电路内部元件编号无效");
         if(c.type==GATE_MODULE && (!c.module || !ValidateSubcircuit(*c.module,error,depth+1)))return false;
     }

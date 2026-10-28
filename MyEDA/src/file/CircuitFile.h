@@ -23,6 +23,8 @@ inline wxString GateTypeName(GateType t) {
     if (t == GATE_XOR) return "XOR";
     if (t == GATE_NAND) return "NAND";
     if (t == GATE_NOR) return "NOR";
+    if(t==GATE_DFF)return "DFF";
+    if(t==SW_CLOCK)return "CLK";
     if (t == GATE_MODULE) return "MODULE";
     if (t == GATE_CUSTOM) return "CUSTOM";   // 自定义元件:名字另存在 name 字段
     if (t == SW_INPUT) return "SW";
@@ -34,6 +36,8 @@ inline GateType GateTypeFromName(const std::string& s) {
     if (s == "XOR") return GATE_XOR;
     if (s == "NAND") return GATE_NAND;
     if (s == "NOR") return GATE_NOR;
+    if(s=="DFF")return GATE_DFF;
+    if(s=="CLK")return SW_CLOCK;
     if (s == "MODULE") return GATE_MODULE;
     if (s == "CUSTOM") return GATE_CUSTOM;
     if (s == "SW")  return SW_INPUT;
@@ -111,7 +115,7 @@ inline bool JsonToCircuit(const std::string& text,
             Component c; c.id=value.at("id").integer();
             if(c.id<=0 || c.id==INT_MAX || !ids.insert(c.id).second) return false;
             const auto& type=value.at("type").string();
-            const std::set<std::string> types={"AND","OR","NOT","XOR","NAND","NOR","CUSTOM","SW","LED","MODULE"};
+            const std::set<std::string> types={"AND","OR","NOT","XOR","NAND","NOR","CUSTOM","SW","LED","MODULE","DFF","CLK"};
             if(!types.count(type)) return false;
             c.type=GateTypeFromName(type);c.x=value.at("x").integer();c.y=value.at("y").integer();
             if(c.x < -1000000 || c.x > 1000000 || c.y < -1000000 || c.y > 1000000) return false;

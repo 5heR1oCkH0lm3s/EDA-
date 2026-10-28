@@ -15,6 +15,8 @@ enum GateType {
     GATE_CUSTOM,   // 用户自定义元件:2 输入 1 输出,行为由真值表 truth 决定
     SW_INPUT,      // 开关:点击切换 0/1,输出引脚
     GATE_MODULE,   // Reusable hierarchical circuit with named input/output ports.
+    GATE_DFF,     // D input 0, CLK input 1, Q output 2.
+    SW_CLOCK,     // Clock source output 0.
     SW_LED,        // 指示灯:亮=1 灭=0,输入引脚
 };
 
@@ -65,7 +67,7 @@ inline int ModuleHeight(const Component& c) {
 //   开关/指示灯: 0(开关=输出,指示灯=输入)
 inline int GatePinCount(const Component& c) {
     if(c.type==GATE_MODULE)return c.module?(int)(c.module->inputIds.size()+c.module->outputIds.size()):0;
-    if (c.type == SW_INPUT || c.type == SW_LED) return 1;
+    if (c.type == SW_INPUT || c.type == SW_LED || c.type == SW_CLOCK) return 1;
     if (c.type == GATE_NOT) return 2;
     return 3;
 }
@@ -106,6 +108,8 @@ inline wxPoint GetRawPinPos(const Component& c, int pin) {
         if (pin == 1) return wxPoint(c.x - 24, c.y + 10);
         return wxPoint(c.x + 24, c.y);
     }
+    if(c.type==GATE_DFF){if(pin==0)return wxPoint(c.x-22,c.y-8);if(pin==1)return wxPoint(c.x,c.y+22);return wxPoint(c.x+22,c.y);}
+    if(c.type==SW_CLOCK)return wxPoint(c.x+22,c.y);
     if (c.type == SW_INPUT)  return wxPoint(c.x + 22, c.y);   // 开关:输出在右
     return wxPoint(c.x - 20, c.y);                            // 指示灯:输入在左
 }

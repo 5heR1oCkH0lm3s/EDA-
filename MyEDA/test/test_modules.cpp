@@ -80,6 +80,30 @@ int main(int argc,char** argv) {
     check(!SaveCircuit(safePath,oversized,ws),"oversized document save rejected");
     wxFile unchanged(safePath);wxString unchangedText;unchanged.ReadAll(&unchangedText);unchanged.Close();
     check(unchangedText==originalText,"rejected oversized save preserves existing file");wxRemoveFile(safePath);
+
+    wxVector<Component> seq;
+    seq.push_back(make(1,SW_INPUT,100,100));seq.push_back(make(2,SW_CLOCK,100,200));seq.push_back(make(3,GATE_DFF,300,100));seq.push_back(make(4,SW_LED,500,100));
+    wxVector<Wire> seqw;seqw.push_back({1,0,3,0});seqw.push_back({2,0,3,1});seqw.push_back({3,2,4,0});
+    auto state=SimulateCircuit(seq,seqw);int tick=0;std::map<int,int> previous;
+    seq[0].state=true;SimulationTick(seq,seqw,state,tick,previous);
+    check(LedValue(seq[3],seqw,state)==0,"DFF holds before rising clock");
+    SimulationTick(seq,seqw,state,tick,previous);
+    check(LedValue(seq[3],seqw,state)==1,"DFF captures on rising clock");
+    seq[0].state=false;SimulationTick(seq,seqw,state,tick,previous);
+    check(LedValue(seq[3],seqw,state)==1,"DFF holds while clock remains high");
+    SimulationTick(seq,seqw,state,tick,previous);SimulationTick(seq,seqw,state,tick,previous);SimulationTick(seq,seqw,state,tick,previous);
+    check(LedValue(seq[3],seqw,state)==0,"DFF captures next rising clock");
+    check(JsonToCircuit(CircuitToJson(seq,seqw).ToStdString(wxConvUTF8),loaded,lw,next) && loaded[1].type==SW_CLOCK && loaded[2].type==GATE_DFF,"sequential types persist through strict JSON");
+    check(ParseKiCadNetlist(ExportKiCadNetlist(seq,seqw),loaded,lw) && loaded[1].type==SW_CLOCK && loaded[2].type==GATE_DFF,"sequential types survive netlist exchange");
+    Wire feedback{3,2,3,0};wxVector<Wire> empty;
+    check(NormalizeConnection(seq,empty,feedback),"DFF boundary permits sequential feedback");
+    selection.clear();for(const auto& c:seq)selection.insert(c.id);wxVector<wxString> one;one.push_back("A");
+    check(!CreateSubcircuit(seq,seqw,selection,"Sequential",one,one,&error),"sequential encapsulation explains unsupported boundary");
+    seq[0].state=true;seq[1].type=SW_INPUT;seq[1].state=true;
+    state=SimulateCircuit(seq,seqw);tick=0;previous.clear();SimulationTick(seq,seqw,state,tick,previous);
+    check(LedValue(seq[3],seqw,state)==0,"initial high clock does not invent rising edge");
+    seq[1].state=false;SimulationTick(seq,seqw,state,tick,previous);seq[1].state=true;SimulationTick(seq,seqw,state,tick,previous);
+    check(LedValue(seq[3],seqw,state)==1,"initial high clock captures after actual low-high transition");
     if(argc==2) {
         const auto dir=std::filesystem::u8path(argv[1]);std::filesystem::create_directories(dir);
         auto path=[&](const char* name){return wxString((dir/name).wstring());};

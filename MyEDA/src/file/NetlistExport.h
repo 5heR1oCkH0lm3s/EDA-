@@ -29,7 +29,7 @@
 // 引脚电气类型:告诉 PCB 软件这个脚是输入还是输出
 inline wxString PinTypeOf(const Component& c, int pin) {
     if (c.type == GATE_MODULE) return IsOutputPin(c,pin)?"output":"input";
-    if (c.type == SW_INPUT) return "output";
+    if (c.type == SW_INPUT || c.type==SW_CLOCK) return "output";
     if (c.type == SW_LED)   return "input";
     if (c.type == GATE_NOT) return (pin == 0) ? "input" : "output";
     return (pin == 2) ? "output" : "input";   // 多输入门:0/1 输入,2 输出
@@ -245,7 +245,7 @@ inline bool ParseKiCadNetlistUnchecked(const wxString& text,
         c.id = id;
         c.type = GateTypeFromName(val);          // 不认识的名字会落到 AND,下面纠正
         if (val != "AND" && val != "OR" && val != "NOT" && val != "XOR" &&
-            val != "NAND" && val != "NOR" && val != "SW" && val != "LED") {
+            val != "NAND" && val != "NOR" && val != "SW" && val != "LED" && val != "DFF" && val != "CLK") {
             c.type = GATE_CUSTOM;
             c.customName = wxString::FromUTF8(val.c_str());
             c.truth = 0;   // 网表里没有真值表,导入后需在元件库里补行为
