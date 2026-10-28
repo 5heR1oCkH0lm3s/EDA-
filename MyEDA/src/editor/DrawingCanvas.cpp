@@ -845,36 +845,51 @@ void DrawingCanvas::DrawGate(wxDC& dc, const Component& c)
         int w = 0, h = 0;
         dc.GetTextExtent(nm, &w, &h);
         dc.DrawText(nm, x - w / 2, y - h / 2);
-    } else if (c.type == GATE_DFF) {
-        // D 触发器:方框 + "D" 标签
-        dc.DrawRoundedRectangle(x - 22, y - 18, 44, 36, 4);
-        dc.DrawText("D", x - 14, y - 9);
-        dc.SetTextForeground(*wxBLUE);
-        dc.DrawText("CLK", x - 8, y + 8);
-        dc.SetTextForeground(*wxBLACK);
-    } else if (c.type == SW_CLOCK) {
-        // 时钟源:圆角方框 + "CLK" 标签 + 方波符号
-        dc.SetBrush(wxBrush(wxColour(230, 240, 255)));
-        dc.DrawRoundedRectangle(x - 20, y - 14, 40, 28, 4);
-        dc.SetBrush(*wxWHITE_BRUSH);
-        // 画方波符号
-        dc.DrawLine(x - 12, y + 4, x - 12, y - 4);
-        dc.DrawLine(x - 12, y - 4, x - 4, y - 4);
-        dc.DrawLine(x - 4, y - 4, x - 4, y + 4);
-        dc.DrawLine(x - 4, y + 4, x + 4, y + 4);
-        dc.DrawLine(x + 4, y + 4, x + 4, y - 4);
-        dc.DrawLine(x + 4, y - 4, x + 12, y - 4);
-        dc.SetTextForeground(*wxBLACK);
+    } else if (c.type == GATE_DFF || c.type == SW_CLOCK) {
+        const bool flipFlop=c.type==GATE_DFF;
+        const bool high=simRunning && GetOutputPinValue(c.id,flipFlop?2:0)!=0;
+        const wxColour outline=isSel?wxColour(0,126,189):(high?wxColour(24,133,104):wxColour(42,83,119));
+        const wxColour fill=isSel?wxColour(229,246,255):(high?wxColour(231,249,241):wxColour(244,249,255));
+        dc.SetPen(wxPen(outline,1));dc.SetBrush(wxBrush(fill));
+        std::unique_ptr<wxGraphicsContext> gc(wxGraphicsContext::CreateFromUnknownDC(dc));
+        if(gc) {
+            gc->SetAntialiasMode(wxANTIALIAS_DEFAULT);
+            gc->SetPen(wxPen(outline,1));gc->SetBrush(wxBrush(fill));
+            gc->DrawRoundedRectangle(x-(flipFlop?14:16),y-(flipFlop?18:14),flipFlop?28:32,flipFlop?36:28,3);
+        } else dc.DrawRoundedRectangle(x-(flipFlop?14:16),y-(flipFlop?18:14),flipFlop?28:32,flipFlop?36:28,3);
+        dc.SetTextForeground(outline);
+        const auto originalFont=dc.GetFont();
+        if(flipFlop) {
+            const auto data=GetPinPos(c,0),clock=GetPinPos(c,1),q=GetPinPos(c,2);
+            dc.DrawLine(data,wxPoint(x-14,data.y));
+            dc.DrawLine(wxPoint(x+14,q.y),q);
+            dc.DrawLine(wxPoint(x,y+18),clock);
+            // Triangle at the clock terminal denotes rising-edge sampling.
+            dc.DrawLine(x-4,y+18,x,y+12);dc.DrawLine(x,y+12,x+4,y+18);
+            dc.SetFont(originalFont.Scaled(0.85).Bold());
+            dc.DrawText("D",x-10,y-16);dc.DrawText("Q",x+4,y-7);
+            dc.SetFont(originalFont.Scaled(0.65));dc.DrawText("CLK",x-11,y+2);
+        } else {
+            dc.DrawLine(wxPoint(x+16,y),GetPinPos(c,0));
+            dc.SetPen(wxPen(outline,2));
+            wxPoint wave[]={wxPoint(x-11,y+5),wxPoint(x-6,y+5),wxPoint(x-6,y-5),wxPoint(x+2,y-5),wxPoint(x+2,y+5),wxPoint(x+10,y+5),wxPoint(x+10,y-5)};
+            dc.DrawLines(7,wave);
+            dc.SetFont(originalFont.Scaled(0.85));
+            dc.DrawText("CLK",x-dc.GetTextExtent("CLK").x/2,y+18);
+        }
+        dc.SetFont(originalFont);dc.SetTextForeground(*wxBLACK);
     } else if (c.type == SW_INPUT) {
         // 开关:圆角方框 + "1"/"0";闭合时底色变绿
         dc.SetBrush(c.state ? wxBrush(wxColour(144, 238, 144)) : *wxWHITE_BRUSH);
         dc.DrawRoundedRectangle(x - 18, y - 14, 36, 28, 4);
         dc.DrawText(c.state ? "1" : "0", x - 5, y - 9);
+        dc.DrawLine(wxPoint(x+18,y),GetPinPos(c,0));
     } else {
         // 指示灯:圆;仿真中亮=红填充,灭=白
         int v = simRunning ? GetPinValue(c.id, 0) : 0;
         dc.SetBrush((simRunning && v == 1) ? *wxRED_BRUSH : *wxWHITE_BRUSH);
         dc.DrawCircle(x, y, 14);
+        dc.DrawLine(GetPinPos(c,0),wxPoint(x-14,y));
     }
 
     dc.SetPen(wxPen(wxColour(62,91,116), 1));
@@ -887,6 +902,14 @@ void DrawingCanvas::DrawGate(wxDC& dc, const Component& c)
             dc.DrawLine(wxPoint(snapped.x, raw.y), snapped);
         }
         dc.DrawCircle(snapped, 2);
+    }
+
+    if(c.type==SW_INPUT || c.type==SW_LED) {
+        const auto previousFont=dc.GetFont();dc.SetFont(previousFont.Scaled(0.85));
+        dc.SetTextForeground(wxColour(62,91,116));
+        const wxString port=c.type==SW_INPUT?"OUT":"IN";
+        dc.DrawText(port,c.type==SW_INPUT?x+12:x-22-dc.GetTextExtent(port).x/2,y+17);
+        dc.SetFont(previousFont);dc.SetTextForeground(*wxBLACK);
     }
 
     // 编号标签,比如 U1

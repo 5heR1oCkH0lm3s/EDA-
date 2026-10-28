@@ -48,6 +48,15 @@ int main(int argc, char** argv) {
     frame->Show();
     frame->Raise();
     Flush(canvas);
+    canvas->SetPlaceType(SW_LED);Mouse(canvas,wxEVT_LEFT_DOWN,400,250);canvas->SetWireMode();Flush(canvas);
+    const auto ledPorts=Capture(canvas);
+    Check("LED input lead reaches lamp body",ledPorts.GetRed(384,250)<120 && ledPorts.GetGreen(384,250)<140);
+    Component input;input.type=SW_INPUT;input.x=200;input.y=250;
+    Component output;output.type=SW_LED;output.x=400;output.y=250;
+    Check("circuit input switch drives right pin",IsOutputPin(input,0) && GetPinPos(input,0)==wxPoint(220,250));
+    Check("circuit output lamp receives left pin",!IsOutputPin(output,0) && GetPinPos(output,0)==wxPoint(380,250));
+    if(argc>1){wxInitAllImageHandlers();canvas->SetPlaceType(SW_INPUT);Mouse(canvas,wxEVT_LEFT_DOWN,200,250);canvas->SetPlaceType(GATE_DFF);Mouse(canvas,wxEVT_LEFT_DOWN,300,350);canvas->SetPlaceType(SW_CLOCK);Mouse(canvas,wxEVT_LEFT_DOWN,200,350);canvas->SetWireMode();Flush(canvas);Capture(canvas).SaveFile(wxString::FromUTF8(argv[1]),wxBITMAP_TYPE_PNG);}
+    canvas->NewDocument();
     canvas->SetPlaceType(SW_INPUT);
     Mouse(canvas, wxEVT_LEFT_DOWN, 200, 250);
     canvas->SetWireMode();

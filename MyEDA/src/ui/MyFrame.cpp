@@ -209,8 +209,8 @@ void MyFrame::CreateClientArea()
     componentTree->AppendItem(gates, "或非门 NOR", -1, -1, new GateItemData(GATE_NOR));
 
     wxTreeItemId io = componentTree->AppendItem(root, "输入/输出");
-    componentTree->AppendItem(io, "开关", -1, -1, new GateItemData(SW_INPUT));
-    componentTree->AppendItem(io, "指示灯", -1, -1, new GateItemData(SW_LED));
+    componentTree->AppendItem(io, "开关（电路输入）", -1, -1, new GateItemData(SW_INPUT));
+    componentTree->AppendItem(io, "指示灯（电路输出）", -1, -1, new GateItemData(SW_LED));
     componentTree->AppendItem(root,"D 触发器",-1,-1,new GateItemData(GATE_DFF));
     componentTree->AppendItem(root,"时钟源",-1,-1,new GateItemData(SW_CLOCK));
 
@@ -308,6 +308,8 @@ void MyFrame::RefreshPropertyTable()
     addRow("类型", (c->type == GATE_CUSTOM)
                             ? wxString::Format("自定义(%s)", c->customName)
                             : GateTypeName(c->type));
+    if(c->type==SW_INPUT){addRow("用途","电路输入源");addRow("引脚 0","右侧 OUT（输出信号）");}
+    if(c->type==SW_LED){addRow("用途","电路输出显示");addRow("引脚 0","左侧 IN（接收信号）");}
     addRow("位置", wxString::Format("(%d, %d)", c->x, c->y));
 
     if(c->type==GATE_MODULE && c->module) {
