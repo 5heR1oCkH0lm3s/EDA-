@@ -29,3 +29,6 @@ shot_*.png
 
 # Shared update entry point
 !update-and-run.ps1
+
+# Packaged demonstration builds
+dist/

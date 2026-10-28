@@ -21,6 +21,7 @@ try {
     if (-not $Wx) {
         $candidates = @(
             (Join-Path $root '..\基础平台搭建\基础平台搭建\基础工具软件-程序和例子\wxWidgets-3.2.2.1'),
+            (Join-Path $root '..\..\基础平台搭建\基础平台搭建\基础工具软件-程序和例子\wxWidgets-3.2.2.1'),
             'C:\wxWidgets-3.2.2.1',
             'D:\EDA工业软件\基础平台搭建\基础平台搭建\基础工具软件-程序和例子\wxWidgets-3.2.2.1'
         )
@@ -39,7 +40,7 @@ try {
     & $cmake @buildArgs
     if ($LASTEXITCODE -ne 0) { throw '程序编译失败，请查看上方第一条错误。' }
     Write-Host '[3/3] 编译并运行测试 ...' -ForegroundColor Cyan
-    & $cmake --build $buildDir --config Debug --target test_sim
+    & $cmake --build $buildDir --config Debug --target test_sim test_modules
     if ($LASTEXITCODE -ne 0) { throw '测试程序编译失败；未运行旧测试程序。' }
     & (Join-Path $buildDir 'Debug\test_sim.exe')
     if ($LASTEXITCODE -ne 0) { throw '测试未通过，请查看 FAIL 项；本次构建不算成功。' }

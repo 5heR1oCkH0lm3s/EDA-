@@ -7,9 +7,12 @@
 #include <set>
 #include <cctype>
 #include <string>
+#include <regex>
 #include <utility>
 #include <vector>
 #include "core/Component.h"
+#include "core/CircuitValidation.h"
+#include "core/Subcircuit.h"
 
 // ================================================================
 // 网表 = 电路的"电气描述":有哪些元件、哪些引脚彼此相连。
@@ -25,6 +28,7 @@
 
 // 引脚电气类型:告诉 PCB 软件这个脚是输入还是输出
 inline wxString PinTypeOf(const Component& c, int pin) {
+    if (c.type == GATE_MODULE) return IsOutputPin(c,pin)?"output":"input";
     if (c.type == SW_INPUT) return "output";
     if (c.type == SW_LED)   return "input";
     if (c.type == GATE_NOT) return (pin == 0) ? "input" : "output";
@@ -101,6 +105,11 @@ inline wxString ExportKiCadNetlist(const wxVector<Component>& comps, const wxVec
     for (size_t i = 0; i < comps.size(); i++)
         byId[comps[i].id] = &comps[i];
 
+    for(const auto& c:comps)if(c.type==GATE_MODULE) {
+        wxVector<Component> flat;wxVector<Wire> flatW;
+        if(!FlattenCircuit(comps,wires,flat,flatW))return {};
+        return ExportKiCadNetlist(flat,flatW);
+    }
     wxString s = "(export (version \"E\")\n";
     s += "  (design\n";
     s += "    (source \"MyEDA schematic\")\n";
@@ -182,12 +191,12 @@ inline wxString ExportKiCadNetlist(const wxVector<Component>& comps, const wxVec
 // 生成并写文件
 inline bool SaveNetlist(const wxString& path,
                         const wxVector<Component>& comps, const wxVector<Wire>& wires) {
+    const auto text=ExportKiCadNetlist(comps,wires);
+    if(text.empty())return false;
     wxFile f;
-    if (!f.Open(path, wxFile::write))
-        return false;
-    f.Write(ExportKiCadNetlist(comps, wires), wxConvUTF8);
-    f.Close();
-    return true;
+    if(!f.Open(path,wxFile::write))return false;
+    const bool written=f.Write(text,wxConvUTF8);
+    return f.Close() && written;
 }
 
 // ================================================================
@@ -201,7 +210,7 @@ inline bool SaveNetlist(const wxString& path,
 // 说明:网表只含"电气信息"(元件型号/编号、引脚连接),不含坐标和开关状态,
 // 所以导入后的元件按网格自动排布、开关全为"关"——这是网表格式的天然限制
 // ================================================================
-inline bool ParseKiCadNetlist(const wxString& text,
+inline bool ParseKiCadNetlistUnchecked(const wxString& text,
                               wxVector<Component>& comps, wxVector<Wire>& wires) {
     comps.clear();
     wires.clear();
@@ -223,6 +232,7 @@ inline bool ParseKiCadNetlist(const wxString& text,
 
         // 编号优先沿用网表里的数字(我们自己导出的就是 U1、U2...);
         // 撞号时(不同前缀可能同号,如 R1 和 C1)另找一个空号
+        if (refToId.count(std::make_pair(prefix,num))) return false;
         int id = num;
         if (usedIds.count(id)) {
             id = 1;
@@ -274,7 +284,7 @@ inline bool ParseKiCadNetlist(const wxString& text,
             int pin1based = std::stoi((*it)[3]);
             std::map<std::pair<std::string,int>, int>::iterator f =
                 refToId.find(std::make_pair(prefix, num));
-            if (f == refToId.end()) continue;              // 网络里引用了没定义的元件,跳过
+            if (f == refToId.end()) return false; // Missing referenced component.
             pins.push_back(std::make_pair(f->second, pin1based - 1));   // 1 起编号 → 0 起
         }
         for (size_t k = 0; k + 1 < pins.size(); k++)
@@ -284,6 +294,48 @@ inline bool ParseKiCadNetlist(const wxString& text,
         pos = (i < t.size()) ? i : t.size();
     }
     return true;
+}
+
+
+// Validate the document before extraction, then commit the whole parsed circuit.
+inline bool ParseKiCadNetlist(const wxString& text,wxVector<Component>& comps,wxVector<Wire>& wires) {
+    try {
+        const std::string data(text.utf8_str());
+        if(data.size()>10*1024*1024 || !std::regex_search(data,std::regex("^\\s*\\(export[\\s(]"))) return false;
+        int depth=0;bool quoted=false,escaped=false,ended=false;
+        for(unsigned char c:data) {
+            if(ended && !std::isspace(c))return false;
+            if(quoted) { if(escaped)escaped=false;else if(c=='\\')escaped=true;else if(c=='"')quoted=false;continue; }
+            if(c=='"'){quoted=true;continue;}
+            if(c=='(')++depth;
+            else if(c==')'){if(--depth<0)return false;if(!depth)ended=true;}
+        }
+        if(depth || quoted || !ended)return false;
+        wxVector<Component> loaded;wxVector<Wire> raw;
+        if(!ParseKiCadNetlistUnchecked(text,loaded,raw) || loaded.empty())return false;
+        for(const auto& c:loaded) if(c.id<=0 || c.id==INT_MAX)return false;
+        for(const auto& w:raw) {
+            const auto a=CircuitComponent(loaded,w.comp1),b=CircuitComponent(loaded,w.comp2);
+            if(!a || !b || w.pin1<0 || w.pin2<0 || w.pin1>=GatePinCount(*a) || w.pin2>=GatePinCount(*b))return false;
+        }
+        wxVector<Wire> result;
+        for(const auto& net:BuildNets(raw)) {
+            int drivers=0;std::pair<int,int> source;
+            for(const auto& node:net) if(IsOutputPin(*CircuitComponent(loaded,node.first),node.second)){source=node;++drivers;}
+            if(drivers>1)return false;
+            if(drivers==1) {
+                for(const auto& target:net) if(target!=source) {
+                    Wire w={source.first,source.second,target.first,target.second};
+                    if(!NormalizeConnection(loaded,result,w))return false;
+                    result.push_back(w);
+                }
+            } else {
+                // Passive reference components can be inspected, without inventing a driver.
+                for(size_t i=1;i<net.size();++i)result.push_back({net[i-1].first,net[i-1].second,net[i].first,net[i].second});
+            }
+        }
+        comps=loaded;wires=result;return true;
+    } catch(const std::exception&) {return false;}
 }
 
 // 读文件并解析

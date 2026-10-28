@@ -44,6 +44,11 @@ inline wxString FakeUuid(int a, int b) {
 
 inline wxString ExportKicadSchematic(const wxVector<Component>& comps, const wxVector<Wire>& wires)
 {
+    for(const auto& c:comps)if(c.type==GATE_MODULE) {
+        wxVector<Component> flat;wxVector<Wire> flatW;
+        if(!FlattenCircuit(comps,wires,flat,flatW))return {};
+        return ExportKicadSchematic(flat,flatW);
+    }
     const wxString rootUuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
     wxString s = "(kicad_sch\n";
     s += "\t(version 20231120)\n";

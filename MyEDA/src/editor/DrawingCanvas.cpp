@@ -14,6 +14,14 @@ DrawingCanvas::DrawingCanvas(wxWindow* parent)
     Bind(wxEVT_MOTION, &DrawingCanvas::OnMotion, this);
     Bind(wxEVT_LEFT_UP, &DrawingCanvas::OnLeftUp, this);
     Bind(wxEVT_KEY_DOWN, &DrawingCanvas::OnKeyDown, this);
+    Bind(wxEVT_MOUSEWHEEL, &DrawingCanvas::OnWheel, this);
+    Bind(wxEVT_MIDDLE_DOWN, &DrawingCanvas::OnMiddleDown, this);
+    Bind(wxEVT_MIDDLE_UP, &DrawingCanvas::OnMiddleUp, this);
+    Bind(wxEVT_MOUSE_CAPTURE_LOST, [this](wxMouseCaptureLostEvent&) {
+        if (dragging && dragStartSnapshot != CircuitToJson(components,wires,customDefs,moduleDefs)) CommitSnapshot(dragStartSnapshot);
+        dragging = rubberBand = panning = false; NotifyChanged();
+    });
+    savedSnapshot = CircuitToJson(components, wires, customDefs, moduleDefs);
     SetFocus();
 }
 
@@ -25,7 +33,7 @@ DrawingCanvas::DrawingCanvas(wxWindow* parent)
 // ================================================================
 void DrawingCanvas::PushUndo()
 {
-    undoStack.push_back(CircuitToJson(components, wires));
+    undoStack.push_back(CircuitToJson(components, wires, customDefs, moduleDefs));
     if (undoStack.size() > 100)                       // 只留最近 100 步
         undoStack.erase(undoStack.begin());
     redoStack.clear();                                // 有了新动作,重做链失效
@@ -42,8 +50,9 @@ void DrawingCanvas::CommitSnapshot(const wxString& snap)
 void DrawingCanvas::RestoreSnapshot(const wxString& snap)
 {
     int next = 1;
-    JsonToCircuit(std::string((const char*)snap.utf8_str()), components, wires, next);
+    if(!JsonToCircuit(std::string((const char*)snap.utf8_str()), components, wires, next, &customDefs, &moduleDefs)){Hint("无法恢复历史记录，当前电路保留");return;}
     nextId = next;
+    selectedWire = -1;
     sel.clear();
     wireMode = false;
     wireFromComp = -1;
@@ -52,23 +61,23 @@ void DrawingCanvas::RestoreSnapshot(const wxString& snap)
 
 bool DrawingCanvas::Undo()
 {
+    if (simRunning) { Hint("请先停止仿真再撤销"); return false; }
     if (undoStack.size() == 0) return false;
-    redoStack.push_back(CircuitToJson(components, wires));   // 当前状态留给重做
+    redoStack.push_back(CircuitToJson(components, wires, customDefs, moduleDefs));   // 当前状态留给重做
     wxString snap = undoStack.back();
     undoStack.pop_back();
     RestoreSnapshot(snap);
-    dirty = true;
     return true;
 }
 
 bool DrawingCanvas::Redo()
 {
+    if (simRunning) { Hint("请先停止仿真再重做"); return false; }
     if (redoStack.size() == 0) return false;
-    undoStack.push_back(CircuitToJson(components, wires));
+    undoStack.push_back(CircuitToJson(components, wires, customDefs, moduleDefs));
     wxString snap = redoStack.back();
     redoStack.pop_back();
     RestoreSnapshot(snap);
-    dirty = true;
     return true;
 }
 
@@ -80,12 +89,14 @@ void DrawingCanvas::SetSelectMode()
     CancelWirePreview();
     selectMode = true;
     wireMode = false;
+    selectedWire = -1;
     sel.clear();
     NotifyChanged();
 }
 
 void DrawingCanvas::SelectAll()
 {
+    selectedWire = -1;
     sel.clear();
     for (size_t i = 0; i < components.size(); i++)
         sel.insert(components[i].id);
@@ -105,29 +116,48 @@ void DrawingCanvas::GetSelectedIds(wxVector<int>& out) const
 void DrawingCanvas::CopySelected()
 {
     clipComps.clear();
+    clipWires.clear();
     for (size_t i = 0; i < components.size(); i++)
         if (sel.count(components[i].id))
             clipComps.push_back(components[i]);
+    for (const auto& wire : wires)
+        if (sel.count(wire.comp1) && sel.count(wire.comp2)) clipWires.push_back(wire);
 }
 
 void DrawingCanvas::CutSelected()
 {
+    if (simRunning) { Hint("请先停止仿真再剪切"); return; }
     CopySelected();
     DeleteSelected();
 }
 
 void DrawingCanvas::PasteClipboard()
 {
+    if (simRunning) { Hint("请先停止仿真再粘贴"); return; }
     if (clipComps.size() == 0) return;
+    auto candidate=components;auto candidateWires=wires;int candidateNext=nextId;
+    std::map<int,int> candidateIds;
+    for(auto c:clipComps){candidateIds[c.id]=candidateNext;c.id=candidateNext++;candidate.push_back(c);}
+    for(auto w:clipWires){w.comp1=candidateIds[w.comp1];w.comp2=candidateIds[w.comp2];candidateWires.push_back(w);}
+    if(!FitsDocument(candidate,candidateWires,moduleDefs)){Hint("粘贴后工程超过存储限制，请减少子电路实例");return;}
     PushUndo();
+    selectedWire = -1;
     sel.clear();
+    std::map<int,int> pastedIds;
     for (size_t i = 0; i < clipComps.size(); i++) {
         Component c = clipComps[i];
+        const int oldId = c.id;
         c.id = nextId++;
+        pastedIds[oldId] = c.id;
         c.x += 30;          // 往右下偏一点,不和原件重叠
         c.y += 30;
         components.push_back(c);
         sel.insert(c.id);   // 粘贴出来的直接选中,方便接着拖
+    }
+    for (auto w : clipWires) {
+        w.comp1 = pastedIds[w.comp1]; w.comp2 = pastedIds[w.comp2];
+        for (auto& p : w.bends) p += wxPoint(30,30);
+        wires.push_back(w);
     }
     dirty = true;
     NotifyChanged();
@@ -135,6 +165,18 @@ void DrawingCanvas::PasteClipboard()
 
 void DrawingCanvas::NotifyChanged()
 {
+    if (placeType == GATE_CUSTOM) {
+        bool found=false;
+        for (const auto& d : customDefs) if (d.name == placeCustomName) { placeCustomTruth=d.truth; found=true; break; }
+        if (!found) { placeType=GATE_AND; selectMode=true; wireMode=false; CancelWirePreview(); }
+    }
+    if(placeType==GATE_MODULE) {
+        ModulePtr current;
+        if(placeModule)for(const auto& d:moduleDefs)if(d->name==placeModule->name){current=d;break;}
+        if(current)placeModule=current;
+        else {placeModule.reset();placeType=GATE_AND;selectMode=true;wireMode=false;CancelWirePreview();}
+    }
+    dirty = CircuitToJson(components, wires, customDefs, moduleDefs) != savedSnapshot;
     InvalidateScene();                   // Content or selection changed: rebuild cached scene.
     if (onSelection) onSelection();     // 通知外面(属性表)刷新
 }
@@ -171,7 +213,7 @@ void DrawingCanvas::RefreshWirePreview(const wxPoint& endpoint)
     auto refreshPath = [&](const wxPoint& end) {
         const auto path = BuildWirePath(start, wireBends, end);
         for (size_t i = 1; i < path.size(); ++i)
-            RefreshRect(wxRect(path[i-1], path[i]).Inflate(4), false);
+            RefreshRect(wxRect(WorldToScreen(path[i-1]), WorldToScreen(path[i])).Inflate(8), false);
     };
     refreshPath(wireEnd);
     wireEnd = SnapGrid(endpoint);
@@ -193,11 +235,15 @@ void DrawingCanvas::OnPaint(wxPaintEvent&)
     if (sceneDirty) {
         wxMemoryDC sceneDC(sceneBitmap);
         sceneDC.SetFont(GetFont());
+        sceneDC.SetUserScale(viewZoom, viewZoom);
+        sceneDC.SetDeviceOrigin(viewPan.x, viewPan.y);
         DrawScene(sceneDC);
         sceneDC.SelectObject(wxNullBitmap);
         sceneDirty = false;
     }
     dc.DrawBitmap(sceneBitmap, 0, 0, false);
+    dc.SetUserScale(viewZoom, viewZoom);
+    dc.SetDeviceOrigin(viewPan.x, viewPan.y);
     // 连线模式下的橡皮筋预览:灰色虚线跟着鼠标走
     if (wireMode && wireFromComp != -1) {
         Component* a = FindById(wireFromComp);
@@ -224,15 +270,18 @@ void DrawingCanvas::DrawScene(wxDC& dc)
     dc.SetBackground(*wxWHITE_BRUSH);
     dc.Clear();
 
-    // Fine 10-pixel grid with a stronger line every 50 pixels.
+    const wxPoint top = ScreenToWorld(wxPoint(0,0));
     const wxSize size = GetClientSize();
-    for (int x = 0; x < size.x; x += CircuitGrid) {
-        dc.SetPen(wxPen(x % 50 == 0 ? wxColour(208,220,230) : wxColour(235,241,245)));
-        dc.DrawLine(x, 0, x, size.y);
+    const wxPoint bottom = ScreenToWorld(wxPoint(size.x,size.y));
+    const int left = (int)std::floor((double)top.x/CircuitGrid)*CircuitGrid;
+    const int upper = (int)std::floor((double)top.y/CircuitGrid)*CircuitGrid;
+    for (int x=left; x<=bottom.x+CircuitGrid; x+=CircuitGrid) {
+        dc.SetPen(wxPen(x%50==0 ? wxColour(208,220,230) : wxColour(235,241,245)));
+        dc.DrawLine(x,upper,x,bottom.y+CircuitGrid);
     }
-    for (int y = 0; y < size.y; y += CircuitGrid) {
-        dc.SetPen(wxPen(y % 50 == 0 ? wxColour(208,220,230) : wxColour(235,241,245)));
-        dc.DrawLine(0, y, size.x, y);
+    for (int y=upper; y<=bottom.y+CircuitGrid; y+=CircuitGrid) {
+        dc.SetPen(wxPen(y%50==0 ? wxColour(208,220,230) : wxColour(235,241,245)));
+        dc.DrawLine(left,y,bottom.x+CircuitGrid,y);
     }
 
     // 先画连线(在元件下层)
@@ -241,7 +290,9 @@ void DrawingCanvas::DrawScene(wxDC& dc)
         Component* b = FindById(wires[i].comp2);
         if (!a || !b) continue;
         // 仿真中:高电位的线画红色,低电位画黑色(Logisim 风格)
-        if (simRunning && GetOutputValue(wires[i].comp1) == 1)
+        if ((int)i == selectedWire)
+            dc.SetPen(wxPen(wxColour(0,126,189), 3));
+        else if (simRunning && GetOutputPinValue(wires[i].comp1, wires[i].pin1) == 1)
             dc.SetPen(wxPen(*wxRED, 2));
         else
             dc.SetPen(wxPen(*wxBLACK, 2));
@@ -260,11 +311,13 @@ void DrawingCanvas::DrawScene(wxDC& dc)
 // ================================================================
 void DrawingCanvas::OnLeftDown(wxMouseEvent& e)
 {
+    const wxPoint point = ScreenToWorld(e.GetPosition());
+    if(readOnly)return;
     SetFocus();   // 让画布获得键盘焦点,Delete 键才有效
 
     // ----- 仿真运行中:点到开关 = 切换它的开/关,然后重算整个电路 -----
     if (simRunning) {
-        int id = HitTest(e.GetX(), e.GetY());
+        int id = HitTest(point.x, point.y);
         Component* c = (id != -1) ? FindById(id) : nullptr;
         if (c && c->type == SW_INPUT) {
             c->state = !c->state;   // 切换!
@@ -279,12 +332,12 @@ void DrawingCanvas::OnLeftDown(wxMouseEvent& e)
     // ----- 连线模式 -----
     if (wireMode) {
         int cid, pin;
-        if (!HitPin(e.GetX(), e.GetY(), &cid, &pin)) {
+        if (!HitPin(point.x, point.y, &cid, &pin)) {
             if (wireFromComp != -1) {
-                const wxPoint point = SnapGrid(e.GetPosition());
+                const wxPoint waypoint = SnapGrid(point);
                 const wxPoint previous = wireBends.empty() ? GetPinPos(*FindById(wireFromComp), wireFromPin) : wireBends.back();
-                if (point != previous) wireBends.push_back(point);
-                wireEnd = point;
+                if (waypoint != previous) wireBends.push_back(waypoint);
+                wireEnd = waypoint;
                 Refresh(false);
                 Hint("已添加拐点：继续点网格添加，点目标引脚完成，Esc 取消");
             }
@@ -298,9 +351,11 @@ void DrawingCanvas::OnLeftDown(wxMouseEvent& e)
             wireEnd = GetPinPos(*FindById(cid), pin); // Never reuse an earlier endpoint.
         } else {
             if (cid == wireFromComp && pin == wireFromPin) return;
-            PushUndo();              // Click target pin to commit the entire route.
             Wire w = { wireFromComp, wireFromPin, cid, pin };
             w.bends = wireBends;
+            wxString error;
+            if (!NormalizeConnection(components, wires, w, &error)) { Hint(error); return; }
+            PushUndo();
             wires.push_back(w);
             dirty = true;
             CancelWirePreview();     // 可以继续连下一根
@@ -311,10 +366,11 @@ void DrawingCanvas::OnLeftDown(wxMouseEvent& e)
     }
 
     // ----- 普通/选择模式 -----
-    int id = HitTest(e.GetX(), e.GetY());
+    int id = HitTest(point.x, point.y);
     bool add = e.ShiftDown() || e.ControlDown();   // Shift/Ctrl = 加选/取消选择
 
     if (id != -1) {
+        selectedWire = -1;
         if (add) {
             // 加选:已经在集合里就移出(再点一次 = 取消选中)
             if (sel.count(id)) sel.erase(id);
@@ -324,7 +380,8 @@ void DrawingCanvas::OnLeftDown(wxMouseEvent& e)
         }
         // 选中它(如果它不在已选集合里,就改成只选它),然后开始拖动
         if (!sel.count(id)) {
-            sel.clear();
+            selectedWire = -1;
+    sel.clear();
             sel.insert(id);
         }
         dragging = true;
@@ -334,23 +391,28 @@ void DrawingCanvas::OnLeftDown(wxMouseEvent& e)
             if (!c) continue;
             DragItem d;
             d.id = *it;
-            d.offX = e.GetX() - c->x;
-            d.offY = e.GetY() - c->y;
+            d.offX = point.x - c->x;
+            d.offY = point.y - c->y;
             dragItems.push_back(d);
         }
         // 先不急着入撤销栈(可能只是点一下没拖);存个快照,松手时若移动了再入栈
-        dragStartSnapshot = CircuitToJson(components, wires);
+        dragStartSnapshot = CircuitToJson(components, wires, customDefs, moduleDefs);
         CaptureMouse();   // 拖出画布外鼠标消息也归我们,松开才不会丢
         NotifyChanged();
         return;
     }
 
+    if (selectMode) {
+        int hit = HitWire(point);
+        if (hit >= 0) { sel.clear(); selectedWire = hit; NotifyChanged(); return; }
+    }
     // 点在空白处
     if (selectMode) {
+        selectedWire = -1;
         // 选择模式:开始拉框(Shift/Ctrl 则保留原来的选择,做"追加框选")
         if (!add) sel.clear();
         rubberBand = true;
-        rbStart = wxPoint(e.GetX(), e.GetY());
+        rbStart = wxPoint(point.x, point.y);
         rbEnd = rbStart;
         CaptureMouse();
         NotifyChanged();
@@ -358,18 +420,24 @@ void DrawingCanvas::OnLeftDown(wxMouseEvent& e)
     }
 
     // 放置模式:放一个当前类型的元件
+    if(placeType==GATE_MODULE && !placeModule){Hint("请先选择子电路元件");return;}
+    auto candidate=components;Component proposed;proposed.id=nextId;proposed.type=placeType;proposed.module=placeModule;
+    candidate.push_back(proposed);
+    if(!FitsDocument(candidate,wires,moduleDefs)){Hint("工程超过存储限制，请减少子电路实例");return;}
     PushUndo();
     Component c;
     c.type = placeType;
-    const wxPoint placed = SnapGrid(e.GetPosition());
+    const wxPoint placed = SnapGrid(point);
     c.x = placed.x;
     c.y = placed.y;
     c.id = nextId++;
+    if (placeType == GATE_MODULE) { c.module=placeModule; if(!c.module) { Hint("请先从子电路元件库选择元件"); return; } c.customName=c.module->name; }
     if (placeType == GATE_CUSTOM) {
         c.customName = placeCustomName;
         c.truth = placeCustomTruth;
     }
     components.push_back(c);
+    selectedWire = -1;
     sel.clear();
     dirty = true;
     NotifyChanged();
@@ -378,14 +446,16 @@ void DrawingCanvas::OnLeftDown(wxMouseEvent& e)
 // 拖动中:所有选中的元件跟着鼠标走;框选中:框跟着鼠标走;连线模式:预览线跟着走
 void DrawingCanvas::OnMotion(wxMouseEvent& e)
 {
+    const wxPoint point = ScreenToWorld(e.GetPosition());
+    if (panning) { viewPan = panOrigin + (e.GetPosition()-panStart); InvalidateScene(); return; }
     if (simRunning) return;
     if (rubberBand) {
-        rbEnd = wxPoint(e.GetX(), e.GetY());
+        rbEnd = wxPoint(point.x, point.y);
         Refresh(false);
         return;
     }
     if (wireMode && wireFromComp != -1) {
-        RefreshWirePreview(e.GetPosition());
+        RefreshWirePreview(point);
         return;
     }
     if (!dragging)
@@ -393,7 +463,7 @@ void DrawingCanvas::OnMotion(wxMouseEvent& e)
     for (size_t i = 0; i < dragItems.size(); i++) {
         Component* c = FindById(dragItems[i].id);
         if (!c) continue;
-        const wxPoint moved = SnapGrid(wxPoint(e.GetX() - dragItems[i].offX, e.GetY() - dragItems[i].offY));
+        const wxPoint moved = SnapGrid(wxPoint(point.x - dragItems[i].offX, point.y - dragItems[i].offY));
         c->x = moved.x;
         c->y = moved.y;
     }
@@ -405,7 +475,7 @@ void DrawingCanvas::OnLeftUp(wxMouseEvent&)
     // 框选结束:把落在框里的元件选中
     if (rubberBand) {
         rubberBand = false;
-        ReleaseMouse();
+        if (HasCapture()) ReleaseMouse();
         int x1 = std::min(rbStart.x, rbEnd.x), x2 = std::max(rbStart.x, rbEnd.x);
         int y1 = std::min(rbStart.y, rbEnd.y), y2 = std::max(rbStart.y, rbEnd.y);
         if (x2 - x1 > 3 || y2 - y1 > 3) {           // 太小的框当作"点一下"处理
@@ -419,9 +489,9 @@ void DrawingCanvas::OnLeftUp(wxMouseEvent&)
 
     if (dragging) {
         dragging = false;
-        ReleaseMouse();
+        if (HasCapture()) ReleaseMouse();
         // 真的移动过才记一步撤销(纯点选不污染撤销链)
-        if (dragStartSnapshot != CircuitToJson(components, wires)) {
+        if (dragStartSnapshot != CircuitToJson(components, wires, customDefs, moduleDefs)) {
             CommitSnapshot(dragStartSnapshot);
             dirty = true;
         }
@@ -433,7 +503,8 @@ void DrawingCanvas::OnLeftUp(wxMouseEvent&)
 bool DrawingCanvas::InRect(const Component& c, int x1, int y1, int x2, int y2) const
 {
     int r = (c.type == GATE_CUSTOM) ? 26 : 25;
-    return !(c.x + r < x1 || c.x - r > x2 || c.y + r < y1 || c.y - r > y2);
+    const int rx=c.type==GATE_MODULE?75:r,ry=c.type==GATE_MODULE?ModuleHeight(c)/2+4:r;
+    return !(c.x + rx < x1 || c.x - rx > x2 || c.y + ry < y1 || c.y - ry > y2);
 }
 
 // Delete 删除选中元件;Esc 取消选择
@@ -443,7 +514,15 @@ void DrawingCanvas::OnKeyDown(wxKeyEvent& e)
         if (!DeleteSelected())
             Hint("没有可删除的元件:先点选元件(变蓝框),仿真中请先停止仿真");
     } else if (e.GetKeyCode() == WXK_ESCAPE) {
+        if (dragging) {
+            int next=1;
+            JsonToCircuit(std::string(dragStartSnapshot.utf8_str()),components,wires,next,&customDefs,&moduleDefs);
+            nextId=next;
+        }
+        dragging=rubberBand=panning=false;
+        if(HasCapture())ReleaseMouse();
         CancelWirePreview();
+        selectedWire = -1;
         sel.clear();
         NotifyChanged();
     } else {
@@ -456,26 +535,33 @@ void DrawingCanvas::OnKeyDown(wxKeyEvent& e)
 // ================================================================
 void DrawingCanvas::NewDocument()
 {
+    ResetView();
     components.clear();
+    customDefs.clear();
+    moduleDefs.clear();
+    placeModule.reset();
     wires.clear();
     nextId = 1;
+    selectedWire = -1;
     sel.clear();
     wireMode = false;
     wireFromComp = -1;
     simRunning = false;
-    simOut.clear();
+    simOut.clear(); simOut.pins.clear();
     undoStack.clear();
     redoStack.clear();
     filePath = "";
+    savedSnapshot = CircuitToJson(components, wires, customDefs, moduleDefs);
     dirty = false;
     NotifyChanged();
 }
 
 bool DrawingCanvas::SaveFile(const wxString& path)
 {
-    if (!SaveCircuit(path, components, wires, customDefs))
+    if (!SaveCircuit(path, components, wires, customDefs, moduleDefs))
         return false;
     filePath = path;   // 记住存到哪了,下次 Ctrl+S 直接覆盖
+    savedSnapshot = CircuitToJson(components, wires, customDefs, moduleDefs);
     dirty = false;     // 存过盘了,没有未保存修改
     return true;
 }
@@ -483,23 +569,22 @@ bool DrawingCanvas::SaveFile(const wxString& path)
 bool DrawingCanvas::LoadFile(const wxString& path)
 {
     wxVector<CustomDef> loadedDefs;
-    if (!LoadCircuit(path, components, wires, nextId, &loadedDefs))
+    ModuleLibrary loadedModules;
+    if (!LoadCircuit(path, components, wires, nextId, &loadedDefs, &loadedModules))
         return false;
-    // 文件里的自定义元件库并进当前库(同名则以文件里的为准)
-    for (size_t i = 0; i < loadedDefs.size(); i++) {
-        bool merged = false;
-        for (size_t k = 0; k < customDefs.size(); k++)
-            if (customDefs[k].name == loadedDefs[i].name) { customDefs[k].truth = loadedDefs[i].truth; merged = true; break; }
-        if (!merged) customDefs.push_back(loadedDefs[i]);
-    }
+    ResetView();
+    customDefs = loadedDefs;
+    moduleDefs = loadedModules;
+    selectedWire = -1;
     sel.clear();           // 旧电路的选中状态全部作废
     wireMode = false;
     wireFromComp = -1;
     simRunning = false;
-    simOut.clear();
+    simOut.clear(); simOut.pins.clear();
     undoStack.clear();     // 换了一份图纸,旧的撤销历史没有意义
     redoStack.clear();
     filePath = path;
+    savedSnapshot = CircuitToJson(components, wires, customDefs, moduleDefs);
     dirty = false;         // 刚打开的图纸是干净的
     NotifyChanged();
     return true;
@@ -507,17 +592,33 @@ bool DrawingCanvas::LoadFile(const wxString& path)
 
 bool DrawingCanvas::ImportNetlist(const wxString& path)
 {
-    if (!LoadNetlist(path, components, wires))
-        return false;
+    wxVector<Component> loaded;
+    wxVector<Wire> imported, normalized;
+    if (!LoadNetlist(path, loaded, imported)) return false;
+    for (auto wire : imported) {
+        if (!NormalizeConnection(loaded, normalized, wire)) return false;
+        normalized.push_back(wire);
+    }
+    components=loaded; wires=normalized;
+    ResetView();
+    customDefs.clear();
+    moduleDefs.clear();
+    placeModule.reset();
+    for (const auto& c : components) if (c.type == GATE_CUSTOM) {
+        bool known=false;for(const auto& d:customDefs)if(d.name==c.customName)known=true;
+        if(!known){CustomDef d;d.name=c.customName;d.truth=c.truth;customDefs.push_back(d);}
+    }
+    savedSnapshot.clear(); // An imported netlist is a new unsaved document.
     int maxId = 0;
     for (size_t i = 0; i < components.size(); i++)
         if (components[i].id > maxId) maxId = components[i].id;
     nextId = maxId + 1;
+    selectedWire = -1;
     sel.clear();
     wireMode = false;
     wireFromComp = -1;
     simRunning = false;
-    simOut.clear();
+    simOut.clear(); simOut.pins.clear();
     undoStack.clear();
     redoStack.clear();
     filePath = "";   // 网表不是工程文件,之后另存为 .eda
@@ -531,9 +632,13 @@ bool DrawingCanvas::ImportNetlist(const wxString& path)
 // ================================================================
 bool DrawingCanvas::DeleteSelected()
 {
+    if(readOnly)return false;
     if (simRunning) {
         Hint("仿真运行中不能删除元件,请先停止仿真(工具栏[仿真]或 F6)");
         return false;
+    }
+    if (selectedWire >= 0 && (size_t)selectedWire < wires.size()) {
+        PushUndo(); wires.erase(wires.begin()+selectedWire); selectedWire=-1; NotifyChanged(); return true;
     }
     if (sel.empty()) {
         Hint("请先点选元件(选中后元件变蓝框),再删除");
@@ -552,6 +657,7 @@ bool DrawingCanvas::DeleteSelected()
                 wires.erase(wires.begin() + j);
         }
     }
+    selectedWire = -1;
     sel.clear();
     dirty = true;
     NotifyChanged();
@@ -567,7 +673,8 @@ int DrawingCanvas::HitTest(int mx, int my)
     for (int i = (int)components.size() - 1; i >= 0; i--) {
         const Component& c = components[i];
         int r = (c.type == GATE_CUSTOM) ? 26 : 25;   // 自定义元件的方框略大一点
-        if (mx >= c.x - r && mx <= c.x + r && my >= c.y - r && my <= c.y + r)
+        const int rx=c.type==GATE_MODULE?75:r,ry=c.type==GATE_MODULE?ModuleHeight(c)/2+4:r;
+        if (mx >= c.x - rx && mx <= c.x + rx && my >= c.y - ry && my <= c.y + ry)
             return c.id;
     }
     return -1;
@@ -583,7 +690,7 @@ bool DrawingCanvas::HitPin(int mx, int my, int* compId, int* pin)
         for (int p = 0; p < GatePinCount(c); p++) {
             wxPoint pp = GetPinPos(c, p);
             int dx = mx - pp.x, dy = my - pp.y;
-            if (dx * dx + dy * dy <= 9 * 9) {
+            if (dx * dx + dy * dy <= (9.0/viewZoom)*(9.0/viewZoom)) {
                 *compId = c.id;
                 *pin = p;
                 return true;
@@ -709,6 +816,25 @@ void DrawingCanvas::DrawGate(wxDC& dc, const Component& c)
         dc.DrawLine(x - 16, y - 14, x + 10, y);
         dc.DrawLine(x - 16, y + 14, x + 10, y);
         dc.DrawCircle(x + 15, y, 4);
+    } else if (c.type == GATE_MODULE && c.module) {
+        const int height=ModuleHeight(c);
+        dc.SetPen(wxPen(isSel?wxColour(0,126,189):wxColour(42,83,119),2));
+        dc.SetBrush(wxBrush(isSel?wxColour(229,246,255):wxColour(245,250,255)));
+        dc.DrawRoundedRectangle(x-60,y-height/2,120,height,6);
+        const wxFont original=dc.GetFont();dc.SetFont(original.Bold());
+        wxString title=c.module->name;
+        while(title.size()>1 && dc.GetTextExtent(title).x>108)title.RemoveLast();
+        dc.DrawText(title,x-dc.GetTextExtent(title).x/2,y-height/2+5);dc.SetFont(original);
+        dc.SetPen(wxPen(wxColour(202,222,237)));dc.DrawLine(x-54,y-height/2+25,x+54,y-height/2+25);
+        dc.SetPen(wxPen(isSel?wxColour(0,126,189):wxColour(42,83,119),1));
+        const int inputs=(int)c.module->inputNames.size();
+        for(int pin=0;pin<GatePinCount(c);++pin) {
+            const auto port=GetPinPos(c,pin);const bool in=pin<inputs;
+            dc.DrawLine(port,wxPoint(in?x-60:x+60,port.y));
+            wxString name=in?c.module->inputNames[pin]:c.module->outputNames[pin-inputs];
+            while(name.size()>1 && dc.GetTextExtent(name).x>46)name.RemoveLast();
+            dc.DrawText(name,in?x-54:x+54-dc.GetTextExtent(name).x,port.y-7);
+        }
     } else if (c.type == GATE_CUSTOM) {
         // 自定义元件:方框 + 名字(名字太长就截断,画得下为止)
         dc.SetBrush(wxBrush(wxColour(245, 245, 200)));   // 淡黄底色,和内置门区分开
@@ -744,7 +870,7 @@ void DrawingCanvas::DrawGate(wxDC& dc, const Component& c)
     }
 
     // 编号标签,比如 U1
-    dc.DrawText(wxString::Format("U%d", c.id), x - 12, y - 36);
+    dc.DrawText(wxString::Format("U%d", c.id), x - 12, c.type==GATE_MODULE ? y-ModuleHeight(c)/2-18 : y-36);
 }
 
 // ================================================================
@@ -797,7 +923,136 @@ int DrawingCanvas::GetOutputValue(int compId) const
 // 某输入引脚连到的来源输出值(画灯的亮灭、属性表显示用)
 int DrawingCanvas::GetPinValue(int compId, int pin) const
 {
-    int src = FindSource(wires, compId, pin);
-    if (src < 0) return 0;
-    return GetOutputValue(src);
+    return ReadInputSignal(compId,pin,wires,simOut.pins);
+}
+
+
+bool DrawingCanvas::AddCustomDefinition(const wxString& rawName, int truth) {
+    wxString name=rawName; name.Trim(true).Trim(false);
+    if(simRunning || name.empty() || truth<0 || truth>15) return false;
+    for(const auto& def:customDefs) if(def.name==name) {Hint("自定义元件名称已存在");return false;}
+    PushUndo();CustomDef def;def.name=name;def.truth=truth;customDefs.push_back(def);NotifyChanged();return true;
+}
+bool DrawingCanvas::EditCustomDefinition(const wxString& oldName,const wxString& rawName,int truth) {
+    wxString name=rawName;name.Trim(true).Trim(false);
+    if(simRunning || name.empty() || truth<0 || truth>15) return false;
+    for(const auto& def:customDefs) if(def.name==name && name!=oldName) {Hint("自定义元件名称已存在");return false;}
+    for(auto& def:customDefs) if(def.name==oldName) {
+        if(def.name==name && def.truth==truth)return true;
+        PushUndo();def.name=name;def.truth=truth;
+        if(placeType==GATE_CUSTOM && placeCustomName==oldName){placeCustomName=name;placeCustomTruth=truth;}
+        for(auto& c:components) if(c.type==GATE_CUSTOM && c.customName==oldName){c.customName=name;c.truth=truth;}
+        NotifyChanged();return true;
+    }
+    return false;
+}
+bool DrawingCanvas::DeleteCustomDefinition(const wxString& name) {
+    if(simRunning)return false;
+    for(size_t i=0;i<customDefs.size();++i) if(customDefs[i].name==name) {
+        PushUndo();customDefs.erase(customDefs.begin()+i);NotifyChanged();return true;
+    }
+    return false;
+}
+int DrawingCanvas::HitWire(const wxPoint& p) const {
+    for(int i=(int)wires.size()-1;i>=0;--i) {
+        auto a=CircuitComponent(components,wires[i].comp1), b=CircuitComponent(components,wires[i].comp2);
+        if(!a || !b)continue;
+        const auto path=BuildWirePath(GetPinPos(*a,wires[i].pin1),wires[i].bends,GetPinPos(*b,wires[i].pin2));
+        for(size_t k=1;k<path.size();++k) {
+            const auto a=path[k-1],b=path[k];
+            const double tolerance=5.0/viewZoom;
+            if(p.x>=std::min(a.x,b.x)-tolerance && p.x<=std::max(a.x,b.x)+tolerance && p.y>=std::min(a.y,b.y)-tolerance && p.y<=std::max(a.y,b.y)+tolerance) return i;
+        }
+    }
+    return -1;
+}
+
+
+wxPoint DrawingCanvas::ScreenToWorld(const wxPoint& p) const {
+    return wxPoint((int)std::lround((p.x-viewPan.x)/viewZoom),(int)std::lround((p.y-viewPan.y)/viewZoom));
+}
+wxPoint DrawingCanvas::WorldToScreen(const wxPoint& p) const {
+    return wxPoint((int)std::lround(p.x*viewZoom+viewPan.x),(int)std::lround(p.y*viewZoom+viewPan.y));
+}
+void DrawingCanvas::OnWheel(wxMouseEvent& e) {
+    if(dragging || rubberBand || panning)return;
+    const double steps=(double)e.GetWheelRotation()/std::max(1,e.GetWheelDelta());
+    const double next=std::clamp(viewZoom*std::pow(1.2,steps),0.4,3.0);
+    const wxPoint cursor=e.GetPosition();
+    const double worldX=(cursor.x-viewPan.x)/viewZoom,worldY=(cursor.y-viewPan.y)/viewZoom;
+    viewPan=wxPoint((int)std::lround(cursor.x-worldX*next),(int)std::lround(cursor.y-worldY*next));
+    viewZoom=next;InvalidateScene();
+    Hint(wxString::Format("缩放 %d%%；中键拖动平移，Ctrl+0 复位",(int)std::lround(viewZoom*100)));
+}
+void DrawingCanvas::OnMiddleDown(wxMouseEvent& e) {
+    if(dragging || rubberBand || HasCapture())return;
+    panning=true;panStart=e.GetPosition();panOrigin=viewPan;CaptureMouse();
+}
+void DrawingCanvas::OnMiddleUp(wxMouseEvent&) {
+    if(!panning)return;
+    panning=false;if(HasCapture())ReleaseMouse();InvalidateScene();
+}
+void DrawingCanvas::ResetView() {
+    const bool moved=dragging && dragStartSnapshot!=CircuitToJson(components,wires,customDefs,moduleDefs);
+    if(moved) CommitSnapshot(dragStartSnapshot);
+    dragging=rubberBand=panning=false;
+    if(HasCapture())ReleaseMouse();
+    viewZoom=1.0;viewPan=wxPoint(0,0);
+    if(moved)NotifyChanged();else InvalidateScene();
+}
+
+
+int DrawingCanvas::GetOutputPinValue(int id,int pin) const {
+    auto it=simOut.pins.find({id,pin});return it==simOut.pins.end()?0:it->second;
+}
+void DrawingCanvas::SelectedInterfaces(wxVector<int>& inputs,wxVector<int>& outputs) const {
+    inputs.clear();outputs.clear();
+    for(const auto& c:components)if(sel.count(c.id)){if(c.type==SW_INPUT)inputs.push_back(c.id);if(c.type==SW_LED)outputs.push_back(c.id);}
+    std::sort(inputs.begin(),inputs.end());std::sort(outputs.begin(),outputs.end());
+}
+void DrawingCanvas::SetModulePlace(ModulePtr module) {
+    if(simRunning || !module)return;
+    CancelWirePreview();placeModule=module;placeType=GATE_MODULE;wireMode=selectMode=false;
+    sel.clear();selectedWire=-1;NotifyChanged();
+}
+bool DrawingCanvas::PackSelection(const wxString& rawName,const wxVector<wxString>& inputs,const wxVector<wxString>& outputs,wxString* error) {
+    if(simRunning){if(error)*error="请先停止仿真再封装";return false;}
+    wxString name=rawName;name.Trim(true).Trim(false);
+    for(const auto& d:moduleDefs)if(d->name==name){if(error)*error="子电路名称已存在";return false;}
+    if(moduleDefs.size()>=256){if(error)*error="当前工程的子电路元件库已满";return false;}
+    auto d=CreateSubcircuit(components,wires,sel,name,inputs,outputs,error);
+    if(!d)return false;
+    auto candidate=moduleDefs;candidate.push_back(d);
+    if(!FitsDocument(components,wires,candidate)){if(error)*error="封装后工程超过存储限制，请减少重复嵌套";return false;}
+    PushUndo();moduleDefs.push_back(d);NotifyChanged();return true;
+}
+bool DrawingCanvas::ExportModule(const wxString& path,size_t index) const {
+    if(index>=moduleDefs.size())return false;
+    ModuleLibrary one;one.push_back(moduleDefs[index]);
+    return SaveCircuit(path,wxVector<Component>(),wxVector<Wire>(),wxVector<CustomDef>(),one);
+}
+bool DrawingCanvas::ImportModules(const wxString& path,wxString* error) {
+    if(simRunning){if(error)*error="请先停止仿真再导入元件";return false;}
+    wxVector<Component> cs;wxVector<Wire> ws;ModuleLibrary imported;int next=1;
+    if(!LoadCircuit(path,cs,ws,next,nullptr,&imported) || !cs.empty() || !ws.empty() || imported.empty()) {
+        if(error)*error="不是有效的子电路元件文件（请导入 .edasub 文件）";return false;
+    }
+    if(moduleDefs.size()+imported.size()>256){if(error)*error="子电路元件库数量超过限制";return false;}
+    for(const auto& d:imported)for(const auto& existing:moduleDefs)if(d->name==existing->name){if(error)*error="元件库已有同名子电路："+d->name;return false;}
+    auto candidate=moduleDefs;for(const auto& d:imported)candidate.push_back(d);
+    if(!FitsDocument(components,wires,candidate)){if(error)*error="导入后工程超过存储限制";return false;}
+    PushUndo();for(const auto& d:imported)moduleDefs.push_back(d);NotifyChanged();return true;
+}
+
+void DrawingCanvas::ShowSubcircuit(ModulePtr module) {
+    if(!module)return;
+    components=module->components;wires=module->wires;readOnly=true;
+    sel.clear();selectedWire=-1;wireMode=false;wireFromComp=-1;
+    simRunning=false;undoStack.clear();redoStack.clear();
+    savedSnapshot=CircuitToJson(components,wires,customDefs,moduleDefs);dirty=false;InvalidateScene();
+}
+
+bool DrawingCanvas::FitsDocument(const wxVector<Component>& cs,const wxVector<Wire>& ws,const ModuleLibrary& library) const {
+    const auto json=CircuitToJson(cs,ws,customDefs,library).ToStdString(wxConvUTF8);
+    return cs.size()<=10000 && ws.size()<=50000 && json.size()<=9*1024*1024;
 }

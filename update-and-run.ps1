@@ -18,7 +18,7 @@ try {
     $branch = & $git symbolic-ref --quiet --short HEAD
     if ($LASTEXITCODE -ne 0) { throw '当前处于 detached HEAD，请先切换到开发分支。' }
     $null = & $git rev-parse --abbrev-ref --symbolic-full-name '@{u}'
-    if ($LASTEXITCODE -ne 0) { throw '当前分支没有远程跟踪分支。首次推送请参照 docs/四人协作指南.md。' }
+    if ($LASTEXITCODE -ne 0) { throw '当前分支没有远程跟踪分支。首次推送请参照 docs/开发协作/四人协作指南.md。' }
     Write-Host "更新分支：$branch"
     & $git pull --ff-only
     if ($LASTEXITCODE -ne 0) { throw '拉取失败：请检查网络或分支分叉提示。未开始编译，也不会自动合并或覆盖代码。' }

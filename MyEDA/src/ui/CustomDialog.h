@@ -151,6 +151,9 @@ private:
         wxString nm = dlg.GetGateName();
         nm.Trim(true).Trim(false);
         if (nm.empty()) nm = defName;
+        for (const auto& d : defs_) if (d.name==nm) {
+            wxMessageBox("名称已存在，请使用不同的元件名称", "提示", wxOK | wxICON_INFORMATION, this); return;
+        }
         CustomDef d; d.name = nm; d.truth = dlg.GetTruth();
         defs_.push_back(d);
         CustomDefAction a; a.kind = CustomDefAction::ADD; a.oldName = ""; a.newName = nm; a.truth = d.truth;
@@ -168,6 +171,9 @@ private:
         wxString nm = dlg.GetGateName();
         nm.Trim(true).Trim(false);
         if (nm.empty()) nm = d.name;
+        for (size_t i=0;i<defs_.size();++i) if ((int)i!=sel && defs_[i].name==nm) {
+            wxMessageBox("名称已存在，请使用不同的元件名称", "提示", wxOK | wxICON_INFORMATION, this); return;
+        }
         CustomDefAction a;
         a.kind = CustomDefAction::EDIT; a.oldName = d.name; a.newName = nm; a.truth = dlg.GetTruth();
         actions.push_back(a);

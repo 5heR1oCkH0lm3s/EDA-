@@ -29,6 +29,8 @@ public:
     }
     void SetWireMode()  { CancelWirePreview(); wireMode = true; selectMode = false; }
     void SetSelectMode();                              // 进入"框选"模式
+    void ResetView();
+    double GetViewZoom() const { return viewZoom; }
     bool IsSelectMode() const { return selectMode; }
     void SelectAll();                                  // 全选(编辑菜单 Ctrl+A)
     bool DeleteSelected();                             // 删除所有选中元件;返回是否真的删了
@@ -48,11 +50,12 @@ public:
 
     // 导出 KiCad 原理图(.kicad_sch):在 KiCad 里打开后按 F8 即可"从原理图更新 PCB"
     bool ExportKicadSch(const wxString& path) {
+        const auto text=ExportKicadSchematic(components,wires);
+        if(text.empty())return false;
         wxFile f;
         if (!f.Open(path, wxFile::write)) return false;
-        f.Write(ExportKicadSchematic(components, wires), wxConvUTF8);
-        f.Close();
-        return true;
+        const bool written=f.Write(text,wxConvUTF8);
+        return f.Close() && written;
     }
 
     // 逻辑仿真(任务6)
@@ -71,9 +74,10 @@ public:
     bool HasClipboard() const { return clipComps.size() > 0; }
 
     // 给右侧属性表用的查询接口(属性表由 MyFrame 更新,画布只提供数据)
-    int  GetSelectionCount() const { return (int)sel.size(); }
+    int  GetSelectionCount() const { return (int)sel.size() + (selectedWire >= 0 ? 1 : 0); }
     const Component* GetSelected() const;       // 只选中一个时返回它,否则 nullptr
     void GetSelectedIds(wxVector<int>& out) const;
+    int GetOutputPinValue(int compId, int pin) const;
     int  GetOutputValue(int compId) const;      // 某元件输出引脚的仿真值
     int  GetPinValue(int compId, int pin) const;// 某输入引脚连到的来源值
     void SetSelectionCallback(std::function<void()> cb) { onSelection = cb; }
@@ -82,15 +86,32 @@ public:
     void Hint(const wxString& msg) { if (onHint) onHint(msg); }
 
     // 自定义元件库(属于文档数据:跟着电路一起存盘)
-    wxVector<CustomDef>& CustomDefs() { return customDefs; }
+    const wxVector<CustomDef>& CustomDefs() const { return customDefs; }
+    bool AddCustomDefinition(const wxString& name, int truth);
+    bool EditCustomDefinition(const wxString& oldName, const wxString& name, int truth);
+    bool DeleteCustomDefinition(const wxString& name);
+    const ModuleLibrary& Modules() const { return moduleDefs; }
+    void SetModulePlace(ModulePtr module);
+    void ShowSubcircuit(ModulePtr module);
+    bool PackSelection(const wxString& name, const wxVector<wxString>& inputs, const wxVector<wxString>& outputs, wxString* error=nullptr);
+    void SelectedInterfaces(wxVector<int>& inputs, wxVector<int>& outputs) const;
+    bool ImportModules(const wxString& path, wxString* error=nullptr);
+    bool ExportModule(const wxString& path, size_t index) const;
+    bool HasSelectedWire() const { return selectedWire >= 0; }
 
     // 自定义元件的管理(配合主窗口的"管理自定义元件"对话框)
     int  CountCustomInstances(const wxString& name) const;
     void UpdateCustomInstances(const wxString& oldName, const wxString& newName, int truth);
 
 private:
+    bool FitsDocument(const wxVector<Component>& cs,const wxVector<Wire>& ws,const ModuleLibrary& library) const;
     void OnPaint(wxPaintEvent&);
     void OnSize(wxSizeEvent&);
+    void OnWheel(wxMouseEvent&);
+    void OnMiddleDown(wxMouseEvent&);
+    void OnMiddleUp(wxMouseEvent&);
+    wxPoint ScreenToWorld(const wxPoint& p) const;
+    wxPoint WorldToScreen(const wxPoint& p) const;
     void DrawScene(wxDC& dc);             // Cache the grid, committed wires and components.
     void CancelWirePreview();
     void RefreshWirePreview(const wxPoint& endpoint);
@@ -100,6 +121,7 @@ private:
     void OnLeftUp(wxMouseEvent&);
     void OnKeyDown(wxKeyEvent&);
 
+    int HitWire(const wxPoint& point) const;
     int  HitTest(int mx, int my);          // 返回点中的元件编号,没点中返回 -1
     bool HitPin(int mx, int my, int* compId, int* pin);   // 连线模式:命中的引脚
     Component* FindById(int id);           // 按编号找元件,找不到返回 nullptr
@@ -111,12 +133,19 @@ private:
     void RestoreSnapshot(const wxString& snap);
     bool InRect(const Component& c, int x1, int y1, int x2, int y2) const;  // 框选:元件是否落在框里
 
+    bool readOnly = false;
+    double viewZoom = 1.0;
+    wxPoint viewPan{0,0};
+    bool panning = false;
+    wxPoint panStart, panOrigin;
     wxBitmap sceneBitmap;
     bool sceneDirty = true;
     wxSize sceneSize;
     double sceneScale = 0.0;
 
     wxVector<Component> components;   // 画布上所有元件(核心数据!)
+    ModuleLibrary moduleDefs;
+    ModulePtr placeModule;
     wxVector<CustomDef> customDefs;   // 用户自定义元件的库(名字+真值表)
     wxVector<Wire> wires;             // 所有连线
     GateType placeType = GATE_AND;    // 当前放置工具
@@ -126,6 +155,7 @@ private:
 
     // 选择:用集合支持多选(单选就是"集合里只有一个元素")
     std::set<int> sel;
+    int selectedWire = -1;
     bool selectMode = false;          // "选择"工具:空白拖动 = 框选
     bool rubberBand = false;          // 正在拉框?
     wxPoint rbStart, rbEnd;           // 框的两个角
@@ -138,7 +168,7 @@ private:
 
     // 仿真状态
     bool simRunning = false;          // 仿真是否运行中
-    std::map<int,int> simOut;         // 每个元件的输出值(仿真结果)
+    SimulationResult simOut;         // 每个元件的输出值(仿真结果)
 
     // 连线模式状态:点第一个引脚记下起点,再点第二个引脚完成连线
     bool wireMode = false;
@@ -152,6 +182,8 @@ private:
 
     // 复制/粘贴(支持多个)
     wxVector<Component> clipComps;
+    wxVector<Wire> clipWires;
+    wxString savedSnapshot;
 
     wxString filePath;                          // 当前电路对应的文件(空=还没保存过)
     bool dirty = false;                         // 有未保存的修改?

@@ -1,5 +1,8 @@
-﻿# 生成"新人上手"一页图(PNG),方便发群或贴进报告
+﻿$ErrorActionPreference = 'Stop'
+# 生成"新人上手"一页图(PNG),方便发群或贴进报告
 # 用法: powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_onboarding_card.ps1
+$repoRoot = Split-Path -Parent $PSScriptRoot
+Set-Location -LiteralPath $repoRoot
 Add-Type -AssemblyName System.Drawing
 
 $W = 1400; $H = 2000
@@ -107,8 +110,8 @@ foreach ($item in $faq) {
 }
 
 # ---------- 页脚 ----------
-Txt '详细说明见 docs/新人上手指南.md   ·   遇到问题先截图发群里,不要自己乱试' 80 1950 22 $grey
+Txt '详细说明见 docs/使用指南/新人上手指南.md   ·   遇到问题先截图发群里,不要自己乱试' 80 1950 22 $grey
 
-$bmp.Save('docs/新人上手-一页图.png', [System.Drawing.Imaging.ImageFormat]::Png)
+$bmp.Save((Join-Path $repoRoot 'docs/images/onboarding/新人上手-一页图.png'), [System.Drawing.Imaging.ImageFormat]::Png)
 $g.Dispose(); $bmp.Dispose()
-Write-Host '已生成 docs/新人上手-一页图.png'
+Write-Host '已生成 docs/images/onboarding/新人上手-一页图.png'

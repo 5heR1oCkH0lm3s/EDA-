@@ -229,6 +229,15 @@ int main(int argc, char** argv) {
         // 网表往返:导出 → 导入 → 再导出,两次文本必须完全一致
         wxVector<Component> rc; wxVector<Wire> rw;
         ParseKiCadNetlist(nl, rc, rw);
+
+        for(int bits=0;bits<4;++bits) {
+            for(auto& c:rc) if(c.id==1)c.state=(bits&2)!=0;else if(c.id==2)c.state=(bits&1)!=0;
+            const auto signals=SimulateCircuit(rc,rw);
+            const auto sum=CircuitComponent(rc,5),carry=CircuitComponent(rc,6);
+            bool ok=sum && carry && LedValue(*sum,rw,signals)==(((bits>>1)^(bits&1))&1) && LedValue(*carry,rw,signals)==(bits==3);
+            Check(("HALF ADDER imported truth table "+std::to_string(bits)).c_str(),ok,1);
+        }
+
         wxString nl2 = ExportKiCadNetlist(rc, rw);
         Check("NETLIST roundtrip identical", (nl == nl2) ? 1 : 0, 1);
         Check("NETLIST roundtrip wires", (int)rw.size(), 6);   // 4 个网络链式重连成 6 根线
@@ -331,7 +340,7 @@ int main(int argc, char** argv) {
 
     // Routing data must survive save/load without turning point pairs into wires.
     {
-        const std::string routed = "{\"components\":[],\"wires\":[[1,0,2,0]],"
+        const std::string routed = "{\"components\":[{\"id\":1,\"type\":\"SW\",\"x\":0,\"y\":0,\"state\":0},{\"id\":2,\"type\":\"LED\",\"x\":100,\"y\":0,\"state\":0}],\"wires\":[[1,0,2,0]],"
             "\"wireRoutes\":[{\"wire\":0,\"points\":[[300,250],[300,400],[450,400]]}]}";
         wxVector<Component> rc; wxVector<Wire> rw; int rn=1;
         JsonToCircuit(routed, rc, rw, rn);
@@ -352,6 +361,33 @@ int main(int argc, char** argv) {
         Check("ROUTE every vertex on grid", grid, 1);
         Check("ROUTE only horizontal or vertical segments", orthogonal, 1);
         Check("GRID negative coordinates snap correctly", SnapGrid(wxPoint(-17,-24)) == wxPoint(-20,-20), 1);
+    }
+
+
+    {
+        wxVector<Component> keep; Component c; c.id=99; keep.push_back(c);
+        wxVector<Wire> keepW; int next=100;
+        Check("INVALID syntax rejected", !JsonToCircuit("{not json",keep,keepW,next), 1);
+        Check("INVALID load preserves existing circuit", keep.size()==1 && keep[0].id==99 && next==100,1);
+        Check("INVALID missing schema rejected", !JsonToCircuit("{}",keep,keepW,next),1);
+    }
+
+
+    {
+        wxVector<Component> cs;Component a;a.id=1;a.type=SW_INPUT;cs.push_back(a);Component b;b.id=2;b.type=SW_LED;cs.push_back(b);
+        wxVector<Wire> ws;Wire w={2,0,1,0};
+        Check("WIRE reverse direction normalized",NormalizeConnection(cs,ws,w) && w.comp1==1 && w.comp2==2,1);
+        ws.push_back(w);Wire duplicate=w;
+        Check("WIRE duplicate input rejected",!NormalizeConnection(cs,ws,duplicate),1);
+        wxVector<CustomDef> definitions;CustomDef d;d.name=wxString::FromUTF8(u8"门\"\\\n");d.truth=6;definitions.push_back(d);
+        auto json=CircuitToJson(cs,ws,definitions);wxVector<Component> parsed;wxVector<Wire> parsedW;wxVector<CustomDef> parsedD;int next=1;
+        Check("JSON escaped unicode names roundtrip",JsonToCircuit(std::string(json.utf8_str()),parsed,parsedW,next,&parsedD) && parsedD.size()==1 && parsedD[0].name==d.name,1);
+        std::string broken=std::string(json.utf8_str());broken+=" garbage";
+        Check("JSON trailing content rejected",!JsonToCircuit(broken,parsed,parsedW,next),1);
+        Check("JSON output survives rejected input",parsed.size()==2 && parsedW.size()==1,1);
+        Check("JSON invalid reference rejected",!JsonToCircuit("{\"components\":[],\"wires\":[[1,0,2,0]]}",parsed,parsedW,next),1);
+        cs[0].type=GATE_NOT;cs[1].type=GATE_NOT;ws.clear();ws.push_back({1,1,2,0});Wire cycle={2,1,1,0};
+        Check("WIRE combinational feedback rejected",!NormalizeConnection(cs,ws,cycle),1);
     }
 
     std::cout << (failures == 0 ? "=== ALL PASS ===" : "=== FAILED ===") << "\n";

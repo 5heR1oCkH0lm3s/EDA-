@@ -4,6 +4,8 @@
 #include <wx/bmpbndl.h>
 #include <wx/artprov.h>
 #include <wx/settings.h>
+#include <wx/tokenzr.h>
+#include <wx/choicdlg.h>
 
 MyFrame::MyFrame(const wxString& title)
     : wxFrame(nullptr, wxID_ANY, title, wxDefaultPosition, wxSize(1200, 800))
@@ -16,6 +18,10 @@ MyFrame::MyFrame(const wxString& title)
     SetStatusText("就绪");
 
     // ============ 绑定菜单事件 ============
+    Bind(wxEVT_MENU, &MyFrame::OnPackModule, this, ID_MENU_PACK_MODULE);
+    Bind(wxEVT_MENU, &MyFrame::OnImportModule, this, ID_MENU_IMPORT_MODULE);
+    Bind(wxEVT_MENU, &MyFrame::OnExportModule, this, ID_MENU_EXPORT_MODULE);
+    Bind(wxEVT_MENU, &MyFrame::OnInspectModule, this, ID_MENU_INSPECT_MODULE);
     Bind(wxEVT_MENU, &MyFrame::OnNew,            this, ID_MENU_NEW);
     Bind(wxEVT_MENU, &MyFrame::OnOpen,           this, ID_MENU_OPEN);
     Bind(wxEVT_MENU, &MyFrame::OnSave,           this, ID_MENU_SAVE);
@@ -35,6 +41,7 @@ MyFrame::MyFrame(const wxString& title)
     Bind(wxEVT_MENU, &MyFrame::OnManageCustom,   this, ID_MENU_MANAGE_CUSTOM);
     Bind(wxEVT_MENU, &MyFrame::OnSelectAll,      this, ID_MENU_SELECT_ALL);
     Bind(wxEVT_CLOSE_WINDOW, &MyFrame::OnClose,  this);
+    Bind(wxEVT_MENU, [this](wxCommandEvent&) { canvas->ResetView(); SetStatusText("视图已复位为 100%"); }, ID_MENU_RESET_VIEW);
     Bind(wxEVT_MENU, &MyFrame::OnAbout,          this, ID_MENU_ABOUT);
     Bind(wxEVT_MENU, &MyFrame::OnExit,           this, wxID_EXIT);
 
@@ -88,6 +95,11 @@ void MyFrame::CreateMenuBar()
     projectMenu->Append(ID_MENU_NEW, "新建工程(&N)...", "新建工程");
     projectMenu->Append(ID_MENU_CUSTOM_GATE, "新建自定义元件(&C)...", "用真值表定义一个新元件");
     projectMenu->Append(ID_MENU_MANAGE_CUSTOM, "管理自定义元件(&M)...", "编辑/删除已定义的自定义元件");
+    projectMenu->AppendSeparator();
+    projectMenu->Append(ID_MENU_PACK_MODULE,"将选中电路封装为元件...","以开关和指示灯定义输入输出端口");
+    projectMenu->Append(ID_MENU_IMPORT_MODULE,"导入子电路元件...","导入可复用的 .edasub 文件");
+    projectMenu->Append(ID_MENU_EXPORT_MODULE,"导出子电路元件...","将元件库中的子电路保存为 .edasub 文件");
+    projectMenu->Append(ID_MENU_INSPECT_MODULE,"查看选中子电路内部...","只读查看方块内部的实际电路");
     menuBar->Append(projectMenu, "工程(&P)");
 
     // ---------- 仿真 ----------
@@ -98,7 +110,7 @@ void MyFrame::CreateMenuBar()
 
     // ---------- 窗口 ----------
     wxMenu* windowMenu = new wxMenu();
-    windowMenu->Append(ID_MENU_RESET_VIEW, "复位视图(&R)", "复位画布视图");
+    windowMenu->Append(ID_MENU_RESET_VIEW, "复位视图(&R)\tCtrl+0", "复位画布视图");
     menuBar->Append(windowMenu, "窗口(&W)");
 
     // ---------- 帮助 ----------
@@ -199,7 +211,8 @@ void MyFrame::CreateClientArea()
     componentTree->AppendItem(io, "指示灯", -1, -1, new GateItemData(SW_LED));
 
     // 自定义元件分支:一个"新建"入口,以后每定义一个就往这里挂一个节点
-    customRootItem = componentTree->AppendItem(root, "自定义元件");
+    customRootItem = componentTree->AppendItem(root, "真值表逻辑门");
+    moduleRootItem = componentTree->AppendItem(root, "子电路元件");
     // 注意:这里先不填充分支 —— 自定义元件库在画布上,而画布是后面才创建的
 
     componentTree->Expand(root);
@@ -271,6 +284,11 @@ void MyFrame::RefreshPropertyTable()
         return;
     }
 
+    if (canvas->HasSelectedWire()) {
+        long row = propertyList->InsertItem(0, "连线");
+        propertyList->SetItem(row, 1, "已选中：Delete 删除，Ctrl+Z 撤销");
+        return;
+    }
     if (!c) {
         long row = propertyList->InsertItem(0, "选中");
         propertyList->SetItem(row, 1, "(未选中元件)：点画布上的元件查看");
@@ -287,6 +305,16 @@ void MyFrame::RefreshPropertyTable()
                             ? wxString::Format("自定义(%s)", c->customName)
                             : GateTypeName(c->type));
     addRow("位置", wxString::Format("(%d, %d)", c->x, c->y));
+
+    if(c->type==GATE_MODULE && c->module) {
+        addRow("子电路",c->module->name);
+        int gates=0;for(const auto& inner:c->module->components)if(inner.type!=SW_INPUT && inner.type!=SW_LED)++gates;
+        addRow("内部元件",wxString::Format("%d 个逻辑元件",gates));
+        const int inputs=(int)c->module->inputIds.size();
+        for(int i=0;i<inputs;++i)addRow("输入 "+c->module->inputNames[i],canvas->IsSimRunning()?wxString::Format("%d",canvas->GetPinValue(c->id,i)):"未仿真");
+        for(size_t i=0;i<c->module->outputIds.size();++i)addRow("输出 "+c->module->outputNames[i],canvas->IsSimRunning()?wxString::Format("%d",canvas->GetOutputPinValue(c->id,inputs+(int)i)):"未仿真");
+        return;
+    }
 
     if (c->type == GATE_CUSTOM) {
         // 真值表拆成四行显示,最直观:每种输入组合对应什么输出
@@ -313,6 +341,7 @@ void MyFrame::RefreshPropertyTable()
 // ================================================================
 void MyFrame::DefineCustomGate()
 {
+    if (canvas->IsSimRunning()) { canvas->Hint("请先停止仿真再定义元件"); return; }
     // 预填上一个定义,方便"改改再做一个新的"
     wxString defName = wxString::Format("MYGATE%d", (int)canvas->CustomDefs().size() + 1);
     int defTruth = 0;
@@ -330,7 +359,7 @@ void MyFrame::DefineCustomGate()
     if (def.name.empty())
         def.name = wxString::Format("自定义%d", (int)canvas->CustomDefs().size() + 1);
     def.truth = dlg.GetTruth();
-    canvas->CustomDefs().push_back(def);
+    if (!canvas->AddCustomDefinition(def.name, def.truth)) return;
 
     RebuildCustomTree();
     // 展开并选中刚建的那个节点(选中→触发 OnTreeSelect→进入放置模式)
@@ -363,6 +392,11 @@ void MyFrame::RebuildCustomTree()
                                   new GateItemData(GATE_CUSTOM, (int)i));
     }
     componentTree->Expand(customRootItem);
+    componentTree->DeleteChildren(moduleRootItem);
+    componentTree->AppendItem(moduleRootItem,"＋ 封装选中电路...",-1,-1,new GateItemData(GATE_MODULE,-1,true));
+    for(size_t i=0;i<canvas->Modules().size();++i)
+        componentTree->AppendItem(moduleRootItem,canvas->Modules()[i]->name,-1,-1,new GateItemData(GATE_MODULE,(int)i));
+    componentTree->Expand(moduleRootItem);
 }
 
 // ================================================================
@@ -371,6 +405,7 @@ void MyFrame::RebuildCustomTree()
 // ================================================================
 void MyFrame::ManageCustomGates()
 {
+    if (canvas->IsSimRunning()) { canvas->Hint("请先停止仿真再管理元件库"); return; }
     if (canvas->CustomDefs().empty()) {
         wxMessageBox("还没有自定义元件。可以用菜单 工程 → 新建自定义元件 先定义一个。",
                      "提示", wxOK | wxICON_INFORMATION, this);
@@ -383,25 +418,11 @@ void MyFrame::ManageCustomGates()
     const wxVector<CustomDefAction>& acts = dlg.GetActions();
     for (size_t i = 0; i < acts.size(); i++) {
         const CustomDefAction& a = acts[i];
-        if (a.kind == CustomDefAction::ADD) {
-            CustomDef d; d.name = a.newName; d.truth = a.truth;
-            canvas->CustomDefs().push_back(d);
-        } else if (a.kind == CustomDefAction::EDIT) {
-            for (size_t k = 0; k < canvas->CustomDefs().size(); k++)
-                if (canvas->CustomDefs()[k].name == a.oldName) {
-                    canvas->CustomDefs()[k].name = a.newName;
-                    canvas->CustomDefs()[k].truth = a.truth;
-                }
-            // 画布上同名的已放置元件一起更新(可撤销)
-            canvas->UpdateCustomInstances(a.oldName, a.newName, a.truth);
-        } else {
-            int n = canvas->CountCustomInstances(a.oldName);
-            for (size_t k = 0; k < canvas->CustomDefs().size(); k++)
-                if (canvas->CustomDefs()[k].name == a.oldName) { canvas->CustomDefs().erase(canvas->CustomDefs().begin() + k); break; }
-            if (n > 0)
-                SetStatusText(wxString::Format("已删除定义「%s」;画布上已放置的 %d 个保持不变", a.oldName, n), 1);
-        }
+        if (a.kind == CustomDefAction::ADD) canvas->AddCustomDefinition(a.newName, a.truth);
+        else if (a.kind == CustomDefAction::EDIT) canvas->EditCustomDefinition(a.oldName, a.newName, a.truth);
+        else canvas->DeleteCustomDefinition(a.oldName);
     }
+
     if (!acts.empty()) {
         RebuildCustomTree();
         RefreshPropertyTable();
@@ -461,6 +482,7 @@ void MyFrame::OnNew(wxCommandEvent&)
 {
     if (!ConfirmDiscardChanges()) return;   // 有未保存修改先问一句
     canvas->NewDocument();
+    RebuildCustomTree();
     SetStatusText("已新建(画布清空)");
 }
 
@@ -528,6 +550,7 @@ void MyFrame::OnExportNetlist(wxCommandEvent&)
 }
 void MyFrame::OnImportNetlist(wxCommandEvent&)
 {
+    if (!ConfirmDiscardChanges()) return;
     // 预填默认名“未命名.net”:刚导出的网表就是这个名,直接点打开即可
     wxFileDialog dlg(this, "导入 KiCad 网表", wxGetCwd(), "未命名.net",
                      "KiCad 网表 (*.net)|*.net",
@@ -538,11 +561,11 @@ void MyFrame::OnImportNetlist(wxCommandEvent&)
         RefreshPropertyTable();
         SetStatusText("网表已导入(元件按网格重新排布):" + dlg.GetPath());
     } else {
-        SetStatusText("导入失败!");
+        SetStatusText("导入失败（文件格式或引脚无效，当前电路已保留）");
     }
 }
-void MyFrame::OnUndo(wxCommandEvent&)         { SetStatusText(canvas->Undo() ? "已撤销" : "没有可撤销的操作"); }
-void MyFrame::OnRedo(wxCommandEvent&)         { SetStatusText(canvas->Redo() ? "已重做" : "没有可重做的操作"); }
+void MyFrame::OnUndo(wxCommandEvent&)         { SetStatusText(canvas->Undo() ? "已撤销" : "没有可撤销的操作"); RebuildCustomTree(); UpdateTitle(); }
+void MyFrame::OnRedo(wxCommandEvent&)         { SetStatusText(canvas->Redo() ? "已重做" : "没有可重做的操作"); RebuildCustomTree(); UpdateTitle(); }
 void MyFrame::OnCut(wxCommandEvent&)          { canvas->CutSelected(); SetStatusText("已剪切"); }
 void MyFrame::OnCopy(wxCommandEvent&)         { canvas->CopySelected(); SetStatusText("已复制"); }
 void MyFrame::OnPaste(wxCommandEvent&)        { canvas->PasteClipboard(); SetStatusText("已粘贴"); }
@@ -576,7 +599,7 @@ void MyFrame::OpenPath(const wxString& path)
         UpdateTitle();
         SetStatusText("已打开:" + path);
     } else {
-        SetStatusText("打开失败:" + path);
+        SetStatusText("打开失败（格式或连线无效，当前电路已保留）:" + path);
     }
 }
 
@@ -600,6 +623,15 @@ void MyFrame::OnTreeSelect(wxTreeEvent& e)
         return;
     }
 
+    if(data->type==GATE_MODULE) {
+        if(data->defineNew){wxCommandEvent command;OnPackModule(command);return;}
+        if(data->customIdx>=0 && (size_t)data->customIdx<canvas->Modules().size()) {
+            const auto module=canvas->Modules()[data->customIdx];canvas->SetModulePlace(module);
+            SetStatusText("放置子电路："+module->name+"；点击空白处放置",1);
+        }
+        return;
+    }
+
     // 点了"新建自定义元件...":弹对话框让用户定义
     if (data->defineNew) {
         DefineCustomGate();
@@ -616,9 +648,7 @@ void MyFrame::OnTreeSelect(wxTreeEvent& e)
     }
 
     canvas->SetPlaceType(data->type);
-    wxString name[] = { "与门", "或门", "非门", "异或门", "与非门", "或非门",
-                        "自定义", "开关", "指示灯" };
-    SetStatusText("放置:" + name[data->type] + ",点击画布放置", 1);
+    SetStatusText("放置:" + GateTypeName(data->type) + ",点击画布放置", 1);
 }
 
 // ================================================================
@@ -633,4 +663,78 @@ void MyFrame::OnToolNot(wxCommandEvent&)      { canvas->SetPlaceType(GATE_NOT); 
 void MyFrame::OnToolSimulate(wxCommandEvent&) {
     if (canvas->IsSimRunning()) { canvas->StopSim(); SetStatusText("仿真已停止"); }
     else { canvas->StartSim(); SetStatusText("仿真运行中:点击开关切换状态"); }
+}
+
+namespace {
+wxVector<wxString> ParsePortNames(wxString text) {
+    text.Replace(wxString::FromUTF8(u8"，"),",");
+    wxVector<wxString> names;wxStringTokenizer tokens(text,",",wxTOKEN_RET_EMPTY_ALL);
+    while(tokens.HasMoreTokens()){wxString name=tokens.GetNextToken();name.Trim(true).Trim(false);names.push_back(name);}
+    return names;
+}
+wxString PortList(const wxVector<int>& ids) {
+    wxString value;for(int id:ids){if(!value.empty())value+=", ";value+=wxString::Format("U%d",id);}return value;
+}
+}
+void MyFrame::OnPackModule(wxCommandEvent&) {
+    if(canvas->IsSimRunning()){canvas->Hint("请先停止仿真再封装");return;}
+    wxVector<int> inputs,outputs;canvas->SelectedInterfaces(inputs,outputs);
+    if(inputs.empty() || outputs.empty()) {
+        wxMessageBox("先用选择工具框选完整电路，包含作为输入的开关和作为输出的指示灯，再进行封装。","封装子电路",wxOK|wxICON_INFORMATION,this);return;
+    }
+    wxDialog dialog(this,wxID_ANY,"将选中电路封装为元件",wxDefaultPosition,wxDefaultSize);
+    auto top=new wxBoxSizer(wxVERTICAL);
+    top->Add(new wxStaticText(&dialog,wxID_ANY,"开关定义输入，指示灯定义输出；端口按元件编号排序。\n原电路保留，封装会加入左侧子电路元件库。"),0,wxALL,12);
+    auto fields=new wxFlexGridSizer(2,8,12);fields->AddGrowableCol(1,1);
+    auto name=new wxTextCtrl(&dialog,wxID_ANY,wxString::Format("Subcircuit%d",(int)canvas->Modules().size()+1),wxDefaultPosition,wxSize(330,-1));
+    fields->Add(new wxStaticText(&dialog,wxID_ANY,"元件名称"),0,wxALIGN_CENTER_VERTICAL);fields->Add(name,1,wxEXPAND);
+    wxString inNames,outNames;
+    for(size_t i=0;i<inputs.size();++i){if(i)inNames+=",";inNames+=wxString::Format("IN%d",(int)i+1);}
+    for(size_t i=0;i<outputs.size();++i){if(i)outNames+=",";outNames+=wxString::Format("OUT%d",(int)i+1);}
+    auto in=new wxTextCtrl(&dialog,wxID_ANY,inNames);
+    auto out=new wxTextCtrl(&dialog,wxID_ANY,outNames);
+    fields->Add(new wxStaticText(&dialog,wxID_ANY,"输入名称（逗号分隔）"),0,wxALIGN_CENTER_VERTICAL);fields->Add(in,1,wxEXPAND);
+    fields->Add(new wxStaticText(&dialog,wxID_ANY,"输入开关编号"),0,wxALIGN_CENTER_VERTICAL);fields->Add(new wxStaticText(&dialog,wxID_ANY,PortList(inputs)),0,wxALIGN_CENTER_VERTICAL);
+    fields->Add(new wxStaticText(&dialog,wxID_ANY,"输出名称（逗号分隔）"),0,wxALIGN_CENTER_VERTICAL);fields->Add(out,1,wxEXPAND);
+    fields->Add(new wxStaticText(&dialog,wxID_ANY,"输出指示灯编号"),0,wxALIGN_CENTER_VERTICAL);fields->Add(new wxStaticText(&dialog,wxID_ANY,PortList(outputs)),0,wxALIGN_CENTER_VERTICAL);
+    top->Add(fields,1,wxEXPAND|wxLEFT|wxRIGHT,12);
+    top->Add(dialog.CreateStdDialogButtonSizer(wxOK|wxCANCEL),0,wxALL|wxALIGN_RIGHT,12);
+    dialog.SetSizerAndFit(top);dialog.CentreOnParent();
+    while(dialog.ShowModal()==wxID_OK) {
+        wxString error;
+        if(canvas->PackSelection(name->GetValue(),ParsePortNames(in->GetValue()),ParsePortNames(out->GetValue()),&error)) {
+            auto module=canvas->Modules().back();RebuildCustomTree();canvas->SetModulePlace(module);
+            SetStatusText("子电路「"+module->name+"」已封装，点击空白处放置；可导出 .edasub 复用",1);return;
+        }
+        wxMessageBox(error.empty()?"无法封装，请检查选区和端口名称":error,"封装未完成",wxOK|wxICON_INFORMATION,&dialog);
+    }
+}
+void MyFrame::OnImportModule(wxCommandEvent&) {
+    if(canvas->IsSimRunning()){canvas->Hint("请先停止仿真");return;}
+    wxFileDialog dialog(this,"导入子电路元件",wxGetCwd(),"","MyEDA 子电路 (*.edasub)|*.edasub",wxFD_OPEN|wxFD_FILE_MUST_EXIST);
+    if(dialog.ShowModal()!=wxID_OK)return;
+    wxString error;
+    if(!canvas->ImportModules(dialog.GetPath(),&error)){wxMessageBox(error,"导入失败",wxOK|wxICON_INFORMATION,this);return;}
+    RebuildCustomTree();canvas->SetModulePlace(canvas->Modules().back());SetStatusText("子电路已导入，点击空白处放置",1);
+}
+void MyFrame::OnExportModule(wxCommandEvent&) {
+    if(canvas->Modules().empty()){wxMessageBox("请先封装或导入一个子电路元件","导出子电路",wxOK|wxICON_INFORMATION,this);return;}
+    wxArrayString choices;for(const auto& d:canvas->Modules())choices.Add(d->name);
+    int index=0;
+    if(choices.size()>1){wxSingleChoiceDialog choice(this,"选择要导出的子电路","导出子电路",choices);if(choice.ShowModal()!=wxID_OK)return;index=choice.GetSelection();}
+    wxFileDialog dialog(this,"导出子电路元件",wxGetCwd(),"subcircuit.edasub","MyEDA 子电路 (*.edasub)|*.edasub",wxFD_SAVE|wxFD_OVERWRITE_PROMPT);
+    if(dialog.ShowModal()!=wxID_OK)return;
+    SetStatusText(canvas->ExportModule(dialog.GetPath(),index)?"子电路元件已导出："+dialog.GetPath():"导出失败，请检查文件位置");
+}
+void MyFrame::OnInspectModule(wxCommandEvent&) {
+    const auto selected=canvas->GetSelected();
+    if(!selected || selected->type!=GATE_MODULE || !selected->module){wxMessageBox("请先选择画布上的一个子电路方块","查看内部电路",wxOK|wxICON_INFORMATION,this);return;}
+    wxDialog dialog(this,wxID_ANY,"内部电路："+selected->module->name,wxDefaultPosition,wxSize(1000,750),wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER);
+    auto layout=new wxBoxSizer(wxVERTICAL);
+    layout->Add(new wxStaticText(&dialog,wxID_ANY,"内部结构只读；滚轮缩放、中键平移。修改原电路后可用新名称重新封装。"),0,wxALL,10);
+    auto view=new DrawingCanvas(&dialog);view->ShowSubcircuit(selected->module);
+    layout->Add(view,1,wxEXPAND|wxLEFT|wxRIGHT,10);
+    layout->Add(dialog.CreateButtonSizer(wxCLOSE),0,wxALL|wxALIGN_RIGHT,10);
+    dialog.Bind(wxEVT_BUTTON,[&dialog](wxCommandEvent&){dialog.EndModal(wxID_CLOSE);},wxID_CLOSE);
+    dialog.SetSizer(layout);dialog.CentreOnParent();dialog.ShowModal();
 }

@@ -8,7 +8,7 @@ find_package(wxWidgets REQUIRED COMPONENTS core base)
 include(${wxWidgets_USE_FILE})
 
 # ================================================================
-# 源码按"模块"分目录,对应小组分工(详见 docs/分工与答辩手册.md):
+# 源码按"模块"分目录,对应小组分工(详见 docs/课程资料/分工与答辩手册.md):
 #   core/   数据模型(共同语言)        —— 全组共用,由 B 维护
 #   ui/     主窗口与对话框              —— A 负责
 #   editor/ 绘图区与编辑交互            —— B 负责
@@ -55,4 +55,12 @@ target_include_directories(test_canvas PRIVATE src)
 target_link_libraries(test_canvas PRIVATE ${wxWidgets_LIBRARIES})
 if(MSVC)
     target_compile_options(test_canvas PRIVATE "/source-charset:utf-8")
+endif()
+
+# Hierarchical subcircuit behavior tests.
+add_executable(test_modules EXCLUDE_FROM_ALL test/test_modules.cpp)
+target_include_directories(test_modules PRIVATE src)
+target_link_libraries(test_modules PRIVATE ${wxWidgets_LIBRARIES})
+if(MSVC)
+    target_compile_options(test_modules PRIVATE "/source-charset:utf-8")
 endif()

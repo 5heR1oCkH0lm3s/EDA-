@@ -26,6 +26,7 @@ enum {
     ID_MENU_CUSTOM_GATE,   // 工程菜单:新建自定义元件
     ID_MENU_EXPORT_SCH,    // 文件菜单:导出 KiCad 原理图
     ID_MENU_MANAGE_CUSTOM, // 工程菜单:管理自定义元件
+    ID_MENU_PACK_MODULE, ID_MENU_IMPORT_MODULE, ID_MENU_EXPORT_MODULE, ID_MENU_INSPECT_MODULE,
     ID_MENU_SELECT_ALL,    // 编辑菜单:全选
 };
 
@@ -56,6 +57,7 @@ private:
 
     // 用户自定义元件(定义类型 CustomDef 在 CustomDialog.h 里,主窗口和对话框共用)
     wxVector<CustomDef> customDefs;      // 用户定义过的所有自定义元件
+    wxTreeItemId moduleRootItem;
     wxTreeItemId customRootItem;         // 树里"自定义元件"根节点
     void DefineCustomGate();             // 弹出对话框让用户定义一个新元件
     void ManageCustomGates();            // 管理(编辑/删除)已定义的自定义元件
@@ -70,6 +72,10 @@ private:
     wxListCtrl* propertyList;    // 右:属性表
 
     // 事件处理函数
+    void OnPackModule(wxCommandEvent&);
+    void OnImportModule(wxCommandEvent&);
+    void OnExportModule(wxCommandEvent&);
+    void OnInspectModule(wxCommandEvent&);
     void OnNew(wxCommandEvent& event);
     void OnOpen(wxCommandEvent& event);
     void OnSave(wxCommandEvent& event);

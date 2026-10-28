@@ -1,5 +1,8 @@
-﻿# 生成四张"答辩速查卡"(每人一张,PNG),方便打印带上台
+﻿$ErrorActionPreference = 'Stop'
+# 生成四张"答辩速查卡"(每人一张,PNG),方便打印带上台
 # 用法: powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_role_cards.ps1
+$repoRoot = Split-Path -Parent $PSScriptRoot
+Set-Location -LiteralPath $repoRoot
 Add-Type -AssemblyName System.Drawing
 
 $navy  = [System.Drawing.Color]::FromArgb(31, 58, 95)
@@ -16,7 +19,7 @@ $cards = @(
   @{ tag = 'A'; label = 'A界面'; name = '界面'; mod = '主窗口与所有对话框';
      resp = @(
         '主窗口三栏布局:元件库树 + 绘图区 + 属性表',
-        '菜单栏与工具栏(25 个菜单项 / 13 个工具按钮)',
+        '菜单栏与工具栏(25 个菜单项 / 10 个工具按钮)',
         '属性表随选中、拖动、撤销、粘贴实时刷新',
         '自定义元件的"定义"和"管理"两个对话框',
         '未保存修改提醒(标题星号 + 关闭前询问)');
@@ -91,20 +94,20 @@ $cards = @(
      resp = @(
         '仿真引擎:迭代传播算法(不碰界面的纯函数)',
         '自定义元件的真值表求值',
-        '45 项单元测试 + 3 个命令行工具',
+        '64 项单元测试 + 3 个命令行工具',
         '半加器验收(四种输入组合)',
         'KiCad 端到端验证方法(导入 0 错误)');
      code = @(
         'src/sim/Simulation.h : SimulateCircuit()   迭代传播',
         'src/sim/Simulation.h : FindSource()   沿线找信号来源',
         '真值表位序:第 i 位 ↔ 输入组合 i,i = A*2+B(与门=8、与非门=7)',
-        'test/test_sim.cpp : 45 项检查(逻辑/存档往返/网表往返/互操作)',
+        'test/test_sim.cpp : 64 项检查(逻辑/存档往返/网表往返/互操作)',
         '命令行:--export-netlist / --export-kicad-sch / --parse-netlist');
      qa = @(
         @('仿真怎么算的?', @('初始化(开关=自身状态、门=0),然后重复"元件数+2"轮,',
                             '每轮让每个门读输入算输出,信号必定传到最远的灯。')),
         @('自定义元件为什么 4 个勾选框就够?', '2 输入共 4 种组合,每种输出 0/1 定完行为就唯一;仿真时按输入组合查表。'),
-        @('你们怎么测试的?', @('三层:单元测试 45 项(不开界面)、GUI 自动化(比对保存出来的文件)、',
+        @('你们怎么测试的?', @('三层:单元测试 64 项(不开界面)、GUI 自动化(比对保存出来的文件)、',
                               '端到端验收(半加器真值表 + KiCad 导入生成 PCB)。')),
         @('单元测试抓到过什么真 bug?', @('存盘函数漏了自定义元件分支,自定义元件存盘后会变成 LED;',
                                       '纯函数测试 1 秒就抓到了。')));
@@ -204,7 +207,7 @@ foreach ($c in $cards) {
     $y = 1950
     WarnIfTooLong $g ('我的 30 分钟上手练习:' + $c.practice) 22 1280 '练习'; Txt $g ('我的 30 分钟上手练习:' + $c.practice) 70 $y 22 $grey $false $null
 
-    $path = "docs/速查卡-" + $c.label + ".png"
+    $path = Join-Path $repoRoot ("docs/images/role-cards/速查卡-" + $c.label + ".png")
     $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
     $g.Dispose(); $bmp.Dispose()
     Write-Host "已生成 $path"
