@@ -239,6 +239,29 @@ int main(int argc, char** argv) {
     canvas->SetSelectMode();Mouse(canvas,wxEVT_LEFT_DOWN,200,200);Mouse(canvas,wxEVT_MOTION,240,230);canvas->ResetView();
     Check("reset during drag preserves dirty and undo state",canvas->IsDirty() && canvas->CanUndo());
 
+    // Test annotate / renumbering components
+    canvas->NewDocument();
+    cs.clear(); ws.clear();
+    {
+        Component ca; ca.id = 5; ca.type = GATE_NOT; ca.x = 300; ca.y = 100; cs.push_back(ca);
+        Component cb; cb.id = 10; cb.type = SW_INPUT; cb.x = 100; cb.y = 100; cs.push_back(cb);
+        ws.push_back({10, 0, 5, 0});
+        SaveCircuit(finalFile, cs, ws);
+        canvas->LoadFile(finalFile);
+        Check("annotate renumbers to continuous U1, U2", canvas->AnnotateComponents());
+        canvas->SaveFile(finalFile);
+        LoadCircuit(finalFile, cs, ws, next);
+        const int idAt100 = (cs[0].x == 100) ? cs[0].id : cs[1].id;
+        const int idAt300 = (cs[0].x == 300) ? cs[0].id : cs[1].id;
+        Check("left component becomes U1", idAt100 == 1);
+        Check("right component becomes U2", idAt300 == 2);
+        Check("wire updated to connect U1 and U2", ws[0].comp1 == 1 && ws[0].comp2 == 2);
+        Check("annotate is undoable", canvas->Undo());
+        canvas->SaveFile(finalFile);
+        LoadCircuit(finalFile, cs, ws, next);
+        Check("undo restores original discontinuous IDs", ws[0].comp1 == 10 && ws[0].comp2 == 5);
+    }
+
 
     canvas->NewDocument();
     cs.clear();ws.clear();
@@ -264,6 +287,10 @@ int main(int argc, char** argv) {
     Check("duplicate module import is rejected",!canvas->ImportModules(moduleFile,&moduleError) && canvas->Modules().size()==1);
     canvas->NewDocument();Check("standalone module import succeeds",canvas->ImportModules(moduleFile,&moduleError) && canvas->Modules().size()==1);
     Check("import library can be undone",canvas->Undo() && canvas->Modules().empty());canvas->Redo();
+    Check("module definition can be deleted", canvas->DeleteModuleDefinition("Inverter") && canvas->Modules().empty());
+    Check("module deletion can be undone", canvas->Undo() && canvas->Modules().size() == 1);
+    Check("module deletion can be redone", canvas->Redo() && canvas->Modules().empty());
+    canvas->Undo();
     canvas->ShowSubcircuit(canvas->Modules()[0]);canvas->SelectAll();
     Check("internal viewer prevents deletion",!canvas->DeleteSelected());
     Mouse(canvas,wxEVT_LEFT_DOWN,500,400);Mouse(canvas,wxEVT_LEFT_UP,500,400);canvas->SaveFile(finalFile);LoadCircuit(finalFile,cs,ws,next);

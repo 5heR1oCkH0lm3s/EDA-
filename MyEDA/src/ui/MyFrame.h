@@ -27,7 +27,8 @@ enum {
     ID_MENU_CUSTOM_GATE,   // 工程菜单:新建自定义元件
     ID_MENU_EXPORT_SCH,    // 文件菜单:导出 KiCad 原理图
     ID_MENU_MANAGE_CUSTOM, // 工程菜单:管理自定义元件
-    ID_MENU_PACK_MODULE, ID_MENU_IMPORT_MODULE, ID_MENU_EXPORT_MODULE, ID_MENU_INSPECT_MODULE,
+    ID_MENU_ANNOTATE,      // 工程菜单:原理图位号重排
+    ID_MENU_PACK_MODULE, ID_MENU_MANAGE_MODULE, ID_MENU_IMPORT_MODULE, ID_MENU_EXPORT_MODULE, ID_MENU_INSPECT_MODULE,
     ID_MENU_SELECT_ALL,    // 编辑菜单:全选
 };
 
@@ -62,6 +63,7 @@ private:
     wxTreeItemId customRootItem;         // 树里"自定义元件"根节点
     void DefineCustomGate();             // 弹出对话框让用户定义一个新元件
     void ManageCustomGates();            // 管理(编辑/删除)已定义的自定义元件
+    void ManageModules();                // 管理(查看/删除)已导入或封装的子电路元件
     void RebuildCustomTree();            // 重建树上的"自定义元件"分支(索引要重排)
     void RefreshPropertyTable();         // 属性表:显示当前选中元件的属性
     void UpdateTitle();                  // 标题栏:显示文件名和"有未保存修改"星号
@@ -75,6 +77,7 @@ private:
 
     // 事件处理函数
     void OnPackModule(wxCommandEvent&);
+    void OnManageModule(wxCommandEvent&);
     void OnImportModule(wxCommandEvent&);
     void OnExportModule(wxCommandEvent&);
     void OnInspectModule(wxCommandEvent&);
@@ -95,6 +98,7 @@ private:
     void OnSimulateStop(wxCommandEvent& event);
     void OnCustomGate(wxCommandEvent& event);
     void OnManageCustom(wxCommandEvent& event);
+    void OnAnnotate(wxCommandEvent& event);
     void OnSelectAll(wxCommandEvent& event);
     void OnSimTimer(wxTimerEvent& event);
     void OnClose(wxCloseEvent& event);

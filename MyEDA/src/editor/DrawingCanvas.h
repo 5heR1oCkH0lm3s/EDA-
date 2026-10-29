@@ -34,6 +34,7 @@ public:
     bool IsSelectMode() const { return selectMode; }
     void SelectAll();                                  // 全选(编辑菜单 Ctrl+A)
     bool DeleteSelected();                             // 删除所有选中元件;返回是否真的删了
+    bool AnnotateComponents();                        // 原理图位号重排(按几何位置重新编号 U1, U2...)
 
     // 保存/打开:真正干活的是 CircuitFile.h 里的函数,这里只负责"拿数据"和"换数据"
     bool SaveFile(const wxString& path);
@@ -98,6 +99,7 @@ public:
     void SelectedInterfaces(wxVector<int>& inputs, wxVector<int>& outputs) const;
     bool ImportModules(const wxString& path, wxString* error=nullptr);
     bool ExportModule(const wxString& path, size_t index) const;
+    bool DeleteModuleDefinition(const wxString& name);
     bool HasSelectedWire() const { return selectedWire >= 0; }
 
     // 自定义元件的管理(配合主窗口的"管理自定义元件"对话框)

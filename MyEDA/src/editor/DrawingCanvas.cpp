@@ -665,6 +665,89 @@ bool DrawingCanvas::DeleteSelected()
 }
 
 // ================================================================
+// 原理图位号重排(Annotate Schematics):
+// 遵循工业标准,按几何空间(从上到下、从左到右)将元件重新顺次编号为 U1, U2, U3...
+// 同步更新所有连接线(Wire)中的元件 ID 引用,并支持 Ctrl+Z 一键撤销
+// ================================================================
+bool DrawingCanvas::AnnotateComponents()
+{
+    if (readOnly) return false;
+    if (simRunning) {
+        Hint("仿真运行中不能重新编号元件，请先停止仿真");
+        return false;
+    }
+    if (components.empty()) {
+        Hint("画布上没有元件");
+        return false;
+    }
+
+    // 垂直方向按 40 像素作为行容差带(同一行内的元件按 X 坐标从左到右编号)
+    constexpr int RowBand = 40;
+    std::vector<size_t> indices(components.size());
+    for (size_t i = 0; i < components.size(); ++i) indices[i] = i;
+
+    std::sort(indices.begin(), indices.end(), [this, RowBand](size_t i1, size_t i2) {
+        const auto& a = components[i1];
+        const auto& b = components[i2];
+        int rowA = (int)std::floor((double)a.y / RowBand);
+        int rowB = (int)std::floor((double)b.y / RowBand);
+        if (rowA != rowB) return rowA < rowB;
+        if (a.x != b.x) return a.x < b.x;
+        return a.id < b.id;
+    });
+
+    std::map<int, int> idMap;
+    int curId = 1;
+    bool alreadySequential = true;
+    for (size_t idx : indices) {
+        idMap[components[idx].id] = curId;
+        if (components[idx].id != curId) {
+            alreadySequential = false;
+        }
+        curId++;
+    }
+
+    if (alreadySequential && nextId == curId) {
+        Hint("元件位号已是最佳连续顺序，无需重排");
+        return true;
+    }
+
+    PushUndo();
+
+    // 1. 更新所有元件的 ID
+    for (auto& c : components) {
+        c.id = idMap[c.id];
+    }
+
+    // 2. 更新所有连线引用的元件 ID
+    for (auto& w : wires) {
+        auto it1 = idMap.find(w.comp1);
+        if (it1 != idMap.end()) w.comp1 = it1->second;
+        auto it2 = idMap.find(w.comp2);
+        if (it2 != idMap.end()) w.comp2 = it2->second;
+    }
+
+    // 3. 更新当前选中的元件 ID 集合
+    if (!sel.empty()) {
+        std::set<int> newSel;
+        for (int oldId : sel) {
+            auto it = idMap.find(oldId);
+            if (it != idMap.end()) newSel.insert(it->second);
+        }
+        sel = newSel;
+    }
+
+    // 4. 重置下一个分配 ID
+    nextId = (int)components.size() + 1;
+    dirty = true;
+    NotifyChanged();
+
+    Hint(wxString::Format("已完成原理图位号重排，共重排 %d 个元件(U1~U%d)",
+                          (int)components.size(), (int)components.size()));
+    return true;
+}
+
+// ================================================================
 // 命中测试:这个点落在哪个元件上?(用包围盒粗略判断)
 // ================================================================
 int DrawingCanvas::HitTest(int mx, int my)
@@ -1092,6 +1175,26 @@ bool DrawingCanvas::ImportModules(const wxString& path,wxString* error) {
     auto candidate=moduleDefs;for(const auto& d:imported)candidate.push_back(d);
     if(!FitsDocument(components,wires,candidate)){if(error)*error="导入后工程超过存储限制";return false;}
     PushUndo();for(const auto& d:imported)moduleDefs.push_back(d);NotifyChanged();return true;
+}
+
+bool DrawingCanvas::DeleteModuleDefinition(const wxString& name) {
+    if (simRunning) return false;
+    for (size_t i = 0; i < moduleDefs.size(); ++i) {
+        if (moduleDefs[i]->name == name) {
+            PushUndo();
+            if (placeModule && placeModule->name == name) {
+                placeModule.reset();
+                placeType = GATE_AND;
+                selectMode = true;
+                wireMode = false;
+                CancelWirePreview();
+            }
+            moduleDefs.erase(moduleDefs.begin() + i);
+            NotifyChanged();
+            return true;
+        }
+    }
+    return false;
 }
 
 void DrawingCanvas::ShowSubcircuit(ModulePtr module) {

@@ -198,3 +198,84 @@ private:
     wxVector<CustomDefAction> actions;     // 用户做过的操作(关掉后由主窗口执行)
     wxListBox* list;
 };
+
+// ================================================================
+// 管理子电路元件:列出所有已导入或封装的子电路,支持查看与删除定义。
+// 同样遵循:对话框内记账,关闭后统一由主窗口执行生效。
+// ================================================================
+class SubcircuitManagerDialog : public wxDialog {
+public:
+    SubcircuitManagerDialog(wxWindow* parent, const ModuleLibrary& defs)
+        : wxDialog(parent, wxID_ANY, "管理子电路元件", wxDefaultPosition, wxSize(560, 400)),
+          defs_(defs)
+    {
+        wxBoxSizer* top = new wxBoxSizer(wxVERTICAL);
+        top->Add(new wxStaticText(this, wxID_ANY, "工程中已定义的子电路元件列表:"),
+                 0, wxALL, 10);
+
+        wxBoxSizer* row = new wxBoxSizer(wxHORIZONTAL);
+        list = new wxListBox(this, wxID_ANY, wxDefaultPosition, wxSize(360, 220));
+        row->Add(list, 1, wxEXPAND | wxRIGHT, 10);
+
+        wxBoxSizer* btns = new wxBoxSizer(wxVERTICAL);
+        wxButton* bDel = new wxButton(this, wxID_ANY, "删除(&D)");
+        btns->Add(bDel, 0, wxEXPAND | wxBOTTOM, 8);
+        row->Add(btns, 0, wxEXPAND);
+        top->Add(row, 1, wxEXPAND | wxLEFT | wxRIGHT, 10);
+
+        top->Add(new wxStaticText(this, wxID_ANY,
+                 "提示: 删除定义只从元件库列表中移除, 不再提供放置;\n"
+                 "画布上已放置的子电路元件会保留其内部电路副本不受影响。"),
+                 0, wxALL, 10);
+
+        wxButton* closeBtn = new wxButton(this, wxID_CANCEL, "关闭");
+        top->Add(closeBtn, 0, wxALL | wxALIGN_RIGHT, 10);
+        SetSizer(top);
+        Center();
+
+        bDel->Bind(wxEVT_BUTTON, &SubcircuitManagerDialog::OnDelete, this);
+        RefreshList();
+    }
+
+    const wxVector<wxString>& GetDeletedModules() const { return deleted_; }
+
+private:
+    void RefreshList()
+    {
+        int sel = list->GetSelection();
+        list->Clear();
+        for (size_t i = 0; i < defs_.size(); i++) {
+            const auto& m = defs_[i];
+            int gates = 0;
+            for (const auto& in : m->components)
+                if (in.type != SW_INPUT && in.type != SW_LED) ++gates;
+            wxString t = wxString::Format("%s   [%d 输入, %d 输出, %d 逻辑元件]",
+                m->name,
+                (int)m->inputIds.size(),
+                (int)m->outputIds.size(),
+                gates);
+            list->Append(t);
+        }
+        if (sel != wxNOT_FOUND && sel < (int)defs_.size()) list->SetSelection(sel);
+    }
+
+    void OnDelete(wxCommandEvent&)
+    {
+        int sel = list->GetSelection();
+        if (sel == wxNOT_FOUND || sel >= (int)defs_.size()) {
+            wxMessageBox("请先在列表里选择一个子电路元件", "提示", wxOK | wxICON_INFORMATION, this);
+            return;
+        }
+        wxString name = defs_[sel]->name;
+        if (wxMessageBox("确定删除子电路元件「" + name + "」?\n(画布上已放置的元件会保留)",
+                         "删除确认", wxYES_NO | wxICON_QUESTION, this) != wxYES)
+            return;
+        deleted_.push_back(name);
+        defs_.erase(defs_.begin() + sel);
+        RefreshList();
+    }
+
+    ModuleLibrary defs_;
+    wxVector<wxString> deleted_;
+    wxListBox* list;
+};

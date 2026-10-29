@@ -19,6 +19,7 @@ MyFrame::MyFrame(const wxString& title)
 
     // ============ 绑定菜单事件 ============
     Bind(wxEVT_MENU, &MyFrame::OnPackModule, this, ID_MENU_PACK_MODULE);
+    Bind(wxEVT_MENU, &MyFrame::OnManageModule, this, ID_MENU_MANAGE_MODULE);
     Bind(wxEVT_MENU, &MyFrame::OnImportModule, this, ID_MENU_IMPORT_MODULE);
     Bind(wxEVT_MENU, &MyFrame::OnExportModule, this, ID_MENU_EXPORT_MODULE);
     Bind(wxEVT_MENU, &MyFrame::OnInspectModule, this, ID_MENU_INSPECT_MODULE);
@@ -39,6 +40,7 @@ MyFrame::MyFrame(const wxString& title)
     Bind(wxEVT_MENU, &MyFrame::OnSimulateStop,   this, ID_MENU_SIMULATE_STOP);
     Bind(wxEVT_MENU, &MyFrame::OnCustomGate,     this, ID_MENU_CUSTOM_GATE);
     Bind(wxEVT_MENU, &MyFrame::OnManageCustom,   this, ID_MENU_MANAGE_CUSTOM);
+    Bind(wxEVT_MENU, &MyFrame::OnAnnotate,       this, ID_MENU_ANNOTATE);
     Bind(wxEVT_MENU, &MyFrame::OnSelectAll,      this, ID_MENU_SELECT_ALL);
     Bind(wxEVT_CLOSE_WINDOW, &MyFrame::OnClose,  this);
     Bind(wxEVT_MENU, [this](wxCommandEvent&) { canvas->ResetView(); SetStatusText("视图已复位为 100%"); }, ID_MENU_RESET_VIEW);
@@ -95,10 +97,12 @@ void MyFrame::CreateMenuBar()
     // ---------- 工程 ----------
     wxMenu* projectMenu = new wxMenu();
     projectMenu->Append(ID_MENU_NEW, "新建工程(&N)...", "新建工程");
+    projectMenu->Append(ID_MENU_ANNOTATE, "原理图位号重排(&R)\tCtrl+R", "按画布坐标从上到下、从左到右重新连续编号所有元件(U1, U2...)");
     projectMenu->Append(ID_MENU_CUSTOM_GATE, "新建自定义元件(&C)...", "用真值表定义一个新元件");
     projectMenu->Append(ID_MENU_MANAGE_CUSTOM, "管理自定义元件(&M)...", "编辑/删除已定义的自定义元件");
     projectMenu->AppendSeparator();
     projectMenu->Append(ID_MENU_PACK_MODULE,"将选中电路封装为元件...","以开关和指示灯定义输入输出端口");
+    projectMenu->Append(ID_MENU_MANAGE_MODULE,"管理子电路元件(&U)...","查看并删除已定义的子电路元件");
     projectMenu->Append(ID_MENU_IMPORT_MODULE,"导入子电路元件...","导入可复用的 .edasub 文件");
     projectMenu->Append(ID_MENU_EXPORT_MODULE,"导出子电路元件...","将元件库中的子电路保存为 .edasub 文件");
     projectMenu->Append(ID_MENU_INSPECT_MODULE,"查看选中子电路内部...","只读查看方块内部的实际电路");
@@ -436,6 +440,37 @@ void MyFrame::ManageCustomGates()
 }
 
 void MyFrame::OnManageCustom(wxCommandEvent&) { ManageCustomGates(); }
+
+void MyFrame::ManageModules()
+{
+    if (canvas->IsSimRunning()) { canvas->Hint("请停止仿真后再管理子电路"); return; }
+    if (canvas->Modules().empty()) {
+        wxMessageBox("当前工程还没有子电路元件。\n可以先选中画布上的电路，点击菜单「工程 → 将选中电路封装为元件」，或者点击「导入子电路元件」。",
+                     "提示", wxOK | wxICON_INFORMATION, this);
+        return;
+    }
+    SubcircuitManagerDialog dlg(this, canvas->Modules());
+    dlg.ShowModal();
+    const wxVector<wxString>& deleted = dlg.GetDeletedModules();
+    for (size_t i = 0; i < deleted.size(); ++i) {
+        canvas->DeleteModuleDefinition(deleted[i]);
+    }
+    if (!deleted.empty()) {
+        RebuildCustomTree();
+        RefreshPropertyTable();
+        UpdateTitle();
+    }
+}
+
+void MyFrame::OnManageModule(wxCommandEvent&) { ManageModules(); }
+
+void MyFrame::OnAnnotate(wxCommandEvent&)
+{
+    if (canvas->AnnotateComponents()) {
+        RefreshPropertyTable();
+        UpdateTitle();
+    }
+}
 
 void MyFrame::OnSelectAll(wxCommandEvent&)
 {
