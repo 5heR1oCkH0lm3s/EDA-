@@ -6,10 +6,10 @@
 
 | 成员 | 角色 | 负责目录 | 主要工作 | 核心文件 |
 |---|---|---|---|---|
-| 成员A | 界面工程师 | `src/ui/` | 主窗口三栏布局、菜单/工具栏/快捷键、属性表联动、自定义元件对话框、未保存提醒、KiCad 原理图导出 | `MyFrame.h/.cpp`、`CustomDialog.h`、`KicadSchExport.h` |
-| 成员B | 交互工程师 | `src/editor/` | 绘图区全部交互:放置/拖动/框选/连线/删除/双缓冲绘制/命中测试/元件符号绘制 | `DrawingCanvas.h/.cpp`、`core/Component.h` |
-| 成员C | 文件工程师 | `src/file/` | .eda 存档(JSON)、网表导出/导入(KiCad 格式)、网络归并(并查集)、封装默认值 | `CircuitFile.h`、`NetlistExport.h` |
-| 成员D | 仿真验证工程师 | `src/sim/` + `test/` | 仿真引擎(迭代传播)、D触发器/时钟源、子电路合并兼容、185 项测试实测全 PASS、半加器验收 | `Simulation.h`、`test_sim.cpp`、`test_modules.cpp`、`test_canvas.cpp` |
+| 成员A(丰鹏扬,组长) | 界面工程师 | `src/ui/` | 主窗口三栏布局、菜单/工具栏/快捷键、属性表联动、自定义元件对话框、未保存提醒、KiCad 原理图导出 | `MyFrame.h/.cpp`、`CustomDialog.h`、`KicadSchExport.h` |
+| 成员B(郑晨曦) | 交互工程师 | `src/editor/` | 绘图区全部交互:放置/拖动/框选/连线/删除/双缓冲绘制/命中测试/元件符号绘制 | `DrawingCanvas.h/.cpp`、`core/Component.h` |
+| 成员C(王际超) | 文件工程师 | `src/file/` | .eda 存档(JSON)、网表导出/导入(KiCad 格式)、网络归并(并查集)、封装默认值 | `CircuitFile.h`、`NetlistExport.h` |
+| 成员D(杨谨淳) | 仿真验证工程师 | `src/sim/` + `test/` | 仿真引擎(迭代传播)、D触发器/时钟源、子电路合并兼容、185 项测试实测全 PASS、半加器验收 | `Simulation.h`、`test_sim.cpp`、`test_modules.cpp`、`test_canvas.cpp` |
 
 > 分工是按**文件目录**切的,每个人有清晰的地盘。core/ 由 B 维护(全组共用),改前沟通。
 
@@ -20,7 +20,7 @@
 ### 第 1 页:封面
 - 项目名称:电路原理图编辑器
 - 课程:工业软件创新训练 I
-- 小组成员:＿＿＿、＿＿＿、＿＿＿、＿＿＿
+- 小组成员:丰鹏扬(组长)、郑晨曦、王际超、杨谨淳
 - 日期:2026-09-17
 
 ### 第 2 页:项目概览(做了什么)
